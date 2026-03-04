@@ -1,1 +1,3 @@
-﻿export default {\n  install() {},\n}\n
+export default {
+  install() {},
+}

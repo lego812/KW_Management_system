@@ -1,1 +1,3 @@
-﻿export function noop(value) {\n  return value\n}\n
+export function noop(value) {
+  return value
+}

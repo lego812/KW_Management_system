@@ -1,1 +1,3 @@
-﻿export * from './auth'\nexport * from './players'\nexport * from './tactics'\n
+export * from './auth'
+export * from './players'
+export * from './tactics'

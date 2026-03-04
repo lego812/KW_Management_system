@@ -1,1 +1,1 @@
-﻿export const messages = {}\n
+export const messages = {}

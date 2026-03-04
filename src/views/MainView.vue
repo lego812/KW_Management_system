@@ -1,70 +1,161 @@
+﻿<script setup>
+import { LogIn, NotebookPen, ShieldCheck, Users, Waypoints } from 'lucide-vue-next'
+</script>
+
 <template>
   <main class="page">
-    <header class="header">
-      <h1>KW 시스템</h1>
-      <p>관리 포털</p>
+    <header class="header-block panel">
+      <div>
+        <p class="eyebrow">메인 대시보드</p>
+        <h1>KW 시스템 운영 현황</h1>
+        <p class="sub">권한, 선수, 전술 데이터를 한 화면에서 빠르게 확인합니다.</p>
+      </div>
     </header>
-    <section class="menu-grid">
-      <router-link class="menu-card" to="/login">
-        <h2>로그인</h2>
-        <p>이메일 또는 구글 계정으로 로그인합니다.</p>
-      </router-link>
-      <router-link class="menu-card" to="/players">
-        <h2>선수 관리</h2>
-        <p>선수 검색, 목록 조회, 등록/수정 화면입니다.</p>
-      </router-link>
-      <router-link class="menu-card" to="/tactics">
-        <h2>전술 관리</h2>
-        <p>전술 보드 목록, 필터, 버전 저장을 관리합니다.</p>
-      </router-link>
+
+    <section class="stats-grid">
+      <article class="panel stat-card">
+        <h2><ShieldCheck :size="16" :stroke-width="1.9" />승인 사용자</h2>
+        <strong>12명</strong>
+        <p>최근 7일 +2</p>
+      </article>
+      <article class="panel stat-card">
+        <h2><Users :size="16" :stroke-width="1.9" />등록 선수</h2>
+        <strong>43명</strong>
+        <p>활성 선수 39명</p>
+      </article>
+      <article class="panel stat-card">
+        <h2><Waypoints :size="16" :stroke-width="1.9" />전술 보드</h2>
+        <strong>27개</strong>
+        <p>이번 주 버전 저장 8건</p>
+      </article>
+    </section>
+
+    <section class="panel nav-panel">
+      <h2>바로가기</h2>
+      <div class="menu-grid">
+        <router-link class="menu-card" to="/login">
+          <h3><LogIn :size="16" :stroke-width="1.9" />로그인 관리</h3>
+          <p>인증 상태 확인 및 계정 접근</p>
+        </router-link>
+        <router-link class="menu-card" to="/players">
+          <h3><Users :size="16" :stroke-width="1.9" />선수 관리</h3>
+          <p>선수 조회, 추가, 상태 관리</p>
+        </router-link>
+        <router-link class="menu-card" to="/tactics">
+          <h3><NotebookPen :size="16" :stroke-width="1.9" />전술 관리</h3>
+          <p>전술 작성 및 버전 관리</p>
+        </router-link>
+      </div>
     </section>
   </main>
 </template>
 
 <style scoped>
 .page {
-  max-width: 960px;
+  max-width: 1080px;
   margin: 0 auto;
-  padding: 32px 16px;
+  padding: 24px 16px 32px;
+  display: grid;
+  gap: 12px;
 }
 
-.header h1 {
+.panel {
+  background: var(--kw-surface);
+  border: 1px solid var(--kw-line);
+  border-radius: var(--kw-radius-lg);
+  padding: 18px;
+  box-shadow: var(--kw-shadow-card);
+}
+
+.eyebrow {
   margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--kw-text-soft);
+  text-transform: uppercase;
 }
 
-.header p {
-  margin: 8px 0 24px;
-  color: #4b5563;
+.header-block h1 {
+  margin: 6px 0 8px;
+  font-size: 28px;
+}
+
+.sub {
+  margin: 0;
+  color: var(--kw-text-muted);
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.stat-card h2 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--kw-text-soft);
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stat-card strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 30px;
+  line-height: 1;
+}
+
+.stat-card p {
+  margin: 10px 0 0;
+  color: var(--kw-text-muted);
+  font-size: 13px;
+}
+
+.nav-panel h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
 }
 
 .menu-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  gap: 10px;
 }
 
 .menu-card {
-  display: block;
-  padding: 16px;
-  border: 1px solid #d1d5db;
-  border-radius: 10px;
+  border: 1px solid var(--kw-line);
+  border-radius: var(--kw-radius-md);
+  padding: 14px;
   text-decoration: none;
-  color: inherit;
-  background: #ffffff;
+  color: var(--kw-text);
+  background: var(--kw-surface-muted);
 }
 
 .menu-card:hover {
-  border-color: #2563eb;
+  border-color: var(--kw-primary);
 }
 
-.menu-card h2 {
-  margin: 0 0 8px;
-  font-size: 18px;
+.menu-card h3 {
+  margin: 0;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .menu-card p {
-  margin: 0;
-  color: #4b5563;
-  font-size: 14px;
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--kw-text-muted);
+}
+
+@media (max-width: 900px) {
+  .stats-grid,
+  .menu-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

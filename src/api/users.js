@@ -1,1 +1,3 @@
-﻿export function listUsers() {\n  return []\n}\n
+export function listUsers() {
+  return []
+}
