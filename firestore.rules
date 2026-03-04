@@ -1,0 +1,218 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /** -----------------------------
+     *  Helpers
+     *  ----------------------------- */
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    // org 멤버 문서 ref
+    function memberDoc(orgId) {
+      return /databases/$(database)/documents/orgs/$(orgId)/members/$(uid());
+    }
+
+    // org 멤버 존재 여부
+    function isMember(orgId) {
+      return signedIn() && exists(memberDoc(orgId));
+    }
+
+    // org 멤버 승인 여부
+    function isApproved(orgId) {
+      return isMember(orgId) && get(memberDoc(orgId)).data.status == "APPROVED";
+    }
+
+    // org 관리자 여부
+    function isAdmin(orgId) {
+      return isApproved(orgId) && get(memberDoc(orgId)).data.role == "ADMIN";
+    }
+
+    // 본인 문서만 수정 가능 (users 프로필)
+    function isSelf(userId) {
+      return signedIn() && uid() == userId;
+    }
+
+    // 서버 타임스탬프/감사필드는 클라가 마음대로 바꾸지 못하게(선택)
+    // 필요하면 더 엄격하게 제한 가능
+
+
+    /** -----------------------------
+     *  users (전역 사용자 프로필)
+     *  users/{uid}
+     *  - 본인만 읽기/쓰기 가능
+     *  - (원하면) ADMIN이 전체 조회 가능하도록 확장 가능
+     *  ----------------------------- */
+    match /users/{userId} {
+      allow read: if isSelf(userId);
+      allow create: if isSelf(userId);
+      allow update: if isSelf(userId);
+      allow delete: if false; // 보통 프로필 삭제는 서버/관리자 플로우로
+    }
+
+
+    /** -----------------------------
+     *  orgs (조직)
+     *  orgs/{orgId}
+     *  - 승인된 멤버만 읽기
+     *  - 조직 생성/수정은 ADMIN 또는 ownerUid 기준으로 운영(여기서는 ADMIN)
+     *  ----------------------------- */
+    match /orgs/{orgId} {
+      allow read: if isApproved(orgId);
+
+      // 조직 생성: 로그인한 사람이 ownerUid로 만들도록 허용 (원하면 막아도 됨)
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == uid();
+
+      // 조직 수정/삭제: 관리자만
+      allow update, delete: if isAdmin(orgId);
+
+
+      /** -----------------------------
+       *  members (승인/역할 관리)
+       *  orgs/{orgId}/members/{memberId}
+       *  ----------------------------- */
+      match /members/{memberId} {
+        // 목록 조회/읽기: 승인된 멤버만 (또는 admin만으로 줄여도 됨)
+        allow read: if isApproved(orgId);
+
+        // 가입(신청): 본인 문서만 생성 가능, status는 PENDING으로 강제
+        allow create: if signedIn()
+          && memberId == uid()
+          && request.resource.data.uid == uid()
+          && request.resource.data.role in ["USER", "COACH"] // 최초 가입 role
+          && request.resource.data.status == "PENDING";
+
+        // 수정:
+        // - 본인은 "displayName" 같은 최소 필드만 수정 허용
+        // - 승인/역할 변경은 ADMIN만 가능
+        allow update: if
+          // ADMIN: 무엇이든(여기서는 members 관리 전권)
+          isAdmin(orgId)
+          ||
+          // 본인: 승인/권한 건드리지 못하게 제한
+          (
+            signedIn()
+            && memberId == uid()
+            && request.resource.data.uid == resource.data.uid
+            && request.resource.data.role == resource.data.role
+            && request.resource.data.status == resource.data.status
+          );
+
+        // 삭제: 원칙적으로 금지(감사/추적). 필요하면 ADMIN만 허용
+        allow delete: if isAdmin(orgId);
+      }
+
+
+      /** -----------------------------
+       *  players (선수 관리)
+       *  orgs/{orgId}/players/{playerId}
+       *  - 승인된 멤버 읽기
+       *  - ADMIN만 생성/수정(소프트삭제 포함)
+       *  - 물리 delete 금지(soft delete)
+       *  ----------------------------- */
+      match /players/{playerId} {
+        allow read: if isApproved(orgId);
+        allow create, update: if isAdmin(orgId);
+        allow delete: if false;
+      }
+
+
+      /** -----------------------------
+       *  formations (포메이션 프리셋)
+       *  orgs/{orgId}/formations/{formationId}
+       *  - 승인된 멤버만 CRUD
+       *  ----------------------------- */
+      match /formations/{formationId} {
+        allow read: if isApproved(orgId);
+        allow create, update, delete: if isApproved(orgId);
+      }
+
+
+      /** -----------------------------
+       *  tacticBoards (전술 보드 메타)
+       *  orgs/{orgId}/tacticBoards/{boardId}
+       *  - 승인된 멤버 읽기/생성/수정
+       *  - 물리 delete 금지(soft delete)
+       *  ----------------------------- */
+      match /tacticBoards/{boardId} {
+        allow read: if isApproved(orgId);
+        allow create, update: if isApproved(orgId);
+        allow delete: if false;
+
+        // state/current
+        match /state/{stateId} {
+          allow read: if isApproved(orgId);
+          allow create, update: if isApproved(orgId);
+          allow delete: if false;
+        }
+
+        // state/chunks/*
+        match /state/chunks/{chunkId} {
+          allow read: if isApproved(orgId);
+          allow create, update: if isApproved(orgId);
+          allow delete: if false;
+        }
+
+        // state/pointers/index
+        match /state/pointers/{pointerId} {
+          allow read: if isApproved(orgId);
+          allow create, update: if isApproved(orgId);
+          allow delete: if false;
+        }
+
+        // state/versions/*
+        match /state/versions/{versionId} {
+          allow read: if isApproved(orgId);
+          allow create, update: if isApproved(orgId);
+          allow delete: if false;
+
+          match /snapshot/{docId} {
+            allow read: if isApproved(orgId);
+            allow create, update: if isApproved(orgId);
+            allow delete: if false;
+          }
+
+          match /snapshotChunks/{chunkId} {
+            allow read: if isApproved(orgId);
+            allow create, update: if isApproved(orgId);
+            allow delete: if false;
+          }
+        }
+
+        // animations/*
+        match /animations/{animationId} {
+          allow read: if isApproved(orgId);
+          allow create, update: if isApproved(orgId);
+          allow delete: if false;
+
+          // animations/{animationId}/tracks/*
+          match /tracks/{trackId} {
+            allow read: if isApproved(orgId);
+            allow create, update: if isApproved(orgId);
+            allow delete: if false;
+          }
+        }
+
+        // comments (선택)
+        match /comments/{commentId} {
+          allow read: if isApproved(orgId);
+          allow create, update: if isApproved(orgId);
+          allow delete: if false;
+        }
+      }
+    }
+
+    /** -----------------------------
+     *  Default deny
+     *  ----------------------------- */
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
