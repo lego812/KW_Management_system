@@ -1,104 +1,355 @@
 ﻿<script setup>
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { signInByEmail, signInByGoogle, watchAuthState } from '../api/auth'
+import { computed, reactive, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
+import { useRoute, useRouter } from 'vue-router'
+import {
+  createPendingMemberProfile,
+  getMemberStatus,
+  getMemberStatusDetail,
+  signInByEmail,
+  signInByGoogle,
+  signOutUser,
+  signUpByEmail,
+} from '../api/auth'
+import { orgId } from '../plugins/firebase'
+import { useAuthStore } from '../stores/auth'
 
 const form = reactive({
+  displayName: '',
   email: '',
   password: '',
+  passwordConfirm: '',
   rememberMe: true,
 })
 
 const router = useRouter()
+const route = useRoute()
+const authStore = useAuthStore()
+const { user } = storeToRefs(authStore)
+const mode = ref('login')
 const loading = ref(false)
+const checkingStatus = ref(false)
 const errorMessage = ref('')
-const currentUserEmail = ref('')
-let unsubscribe
+const successMessage = ref('')
+const showPendingModal = ref(false)
+const debugInfo = ref({
+  uid: '',
+  orgId: orgId ?? '',
+  path: '',
+  exists: false,
+  status: '',
+  lastError: '',
+})
+const currentUserEmail = computed(() => user.value?.email ?? '')
 
-onMounted(() => {
-  unsubscribe = watchAuthState((user) => {
-    currentUserEmail.value = user?.email ?? ''
-    if (user) {
-      router.push('/')
-    }
+function logAuthDebug(step, payload = {}) {
+  console.info(`[KW_AUTH] ${step}`, {
+    origin: window.location.origin,
+    href: window.location.href,
+    route: route.fullPath,
+    ...payload,
   })
-})
+}
 
-onBeforeUnmount(() => {
-  unsubscribe?.()
-})
-
-async function onSubmit() {
+function resetMessages() {
   errorMessage.value = ''
+  successMessage.value = ''
+}
+
+function closePendingModal() {
+  logAuthDebug('closePendingModal', { pendingQuery: route.query.pending })
+  showPendingModal.value = false
+  if (route.query.pending === '1') {
+    router.replace({ name: 'login' })
+  }
+}
+
+function switchMode(nextMode) {
+  mode.value = nextMode
+  resetMessages()
+}
+
+function isPendingByPermissionError(error) {
+  const code = String(error?.code ?? '')
+  const message = String(error?.message ?? '')
+  return code.includes('permission-denied') || /insufficient permissions/i.test(message)
+}
+
+async function verifyApprovedOrShowPending(targetUser) {
+  logAuthDebug('verifyApprovedOrShowPending:start', {
+    uid: targetUser?.uid ?? '',
+    email: targetUser?.email ?? '',
+  })
+  checkingStatus.value = true
+  try {
+    const detail = await getMemberStatusDetail(targetUser?.uid)
+    debugInfo.value = {
+      ...debugInfo.value,
+      ...detail,
+      lastError: '',
+    }
+    const status = await getMemberStatus(targetUser?.uid)
+    debugInfo.value.status = status ?? ''
+    logAuthDebug('verifyApprovedOrShowPending:status', {
+      uid: targetUser?.uid ?? '',
+      status,
+      detail,
+    })
+    if (status !== 'APPROVED') {
+      logAuthDebug('verifyApprovedOrShowPending:pending', { status })
+      await signOutUser()
+      showPendingModal.value = true
+      return false
+    }
+    logAuthDebug('verifyApprovedOrShowPending:approved', { status })
+    return true
+  } catch (error) {
+    logAuthDebug('verifyApprovedOrShowPending:error', {
+      code: error?.code ?? '',
+      message: error?.message ?? String(error),
+    })
+    debugInfo.value.lastError = String(error?.message ?? error ?? '')
+    if (isPendingByPermissionError(error)) {
+      await signOutUser()
+      showPendingModal.value = true
+      return false
+    }
+    throw error
+  } finally {
+    checkingStatus.value = false
+  }
+}
+
+async function onSubmitLogin() {
+  logAuthDebug('onSubmitLogin:start', { email: form.email })
+  resetMessages()
+  closePendingModal()
   loading.value = true
   try {
-    await signInByEmail(form.email, form.password)
-    await router.push('/')
+    const credential = await signInByEmail(form.email, form.password)
+    logAuthDebug('onSubmitLogin:signInSuccess', {
+      uid: credential?.user?.uid ?? '',
+      email: credential?.user?.email ?? '',
+    })
+    const approved = await verifyApprovedOrShowPending(credential.user)
+    if (approved) {
+      logAuthDebug('onSubmitLogin:routerPushHome')
+      await router.push('/')
+    }
   } catch (error) {
+    logAuthDebug('onSubmitLogin:error', {
+      code: error?.code ?? '',
+      message: error?.message ?? String(error),
+    })
     errorMessage.value = error?.message ?? '로그인에 실패했습니다.'
+  } finally {
+    loading.value = false
+    logAuthDebug('onSubmitLogin:done')
+  }
+}
+
+async function onSubmitSignup() {
+  resetMessages()
+
+  if (!form.displayName.trim()) {
+    errorMessage.value = '이름을 입력해주세요.'
+    return
+  }
+
+  if (form.password !== form.passwordConfirm) {
+    errorMessage.value = '비밀번호 확인이 일치하지 않습니다.'
+    return
+  }
+
+  loading.value = true
+
+  try {
+    const credential = await signUpByEmail(form.email, form.password)
+    await createPendingMemberProfile(credential.user, {
+      displayName: form.displayName,
+      email: form.email,
+      role: 'USER',
+    })
+    await signOutUser()
+
+    successMessage.value = '회원가입 요청이 접수되었습니다. 관리자 승인 후 로그인 가능합니다.'
+    form.password = ''
+    form.passwordConfirm = ''
+    mode.value = 'login'
+  } catch (error) {
+    errorMessage.value = error?.message ?? '회원가입에 실패했습니다.'
   } finally {
     loading.value = false
   }
 }
 
 async function onGoogleLogin() {
-  errorMessage.value = ''
+  logAuthDebug('onGoogleLogin:start')
+  resetMessages()
+  closePendingModal()
   loading.value = true
   try {
-    await signInByGoogle()
-    await router.push('/')
+    const credential = await signInByGoogle()
+    logAuthDebug('onGoogleLogin:popupSuccess', {
+      uid: credential?.user?.uid ?? '',
+      email: credential?.user?.email ?? '',
+    })
+    const approved = await verifyApprovedOrShowPending(credential.user)
+    if (approved) {
+      logAuthDebug('onGoogleLogin:routerPushHome')
+      await router.push('/')
+    }
   } catch (error) {
+    logAuthDebug('onGoogleLogin:error', {
+      code: error?.code ?? '',
+      message: error?.message ?? String(error),
+    })
     errorMessage.value = error?.message ?? '구글 로그인에 실패했습니다.'
   } finally {
     loading.value = false
+    logAuthDebug('onGoogleLogin:done')
   }
 }
+
+watch(
+  user,
+  async (nextUser) => {
+    logAuthDebug('watch:user', {
+      uid: nextUser?.uid ?? '',
+      email: nextUser?.email ?? '',
+      mode: mode.value,
+      loading: loading.value,
+      checkingStatus: checkingStatus.value,
+    })
+    if (!nextUser || mode.value !== 'login' || loading.value || checkingStatus.value) return
+    try {
+      const approved = await verifyApprovedOrShowPending(nextUser)
+      if (approved) {
+        logAuthDebug('watch:user:routerPushHome')
+        await router.push('/')
+      }
+    } catch (error) {
+      logAuthDebug('watch:user:error', {
+        code: error?.code ?? '',
+        message: error?.message ?? String(error),
+      })
+      errorMessage.value = error?.message ?? '승인 상태를 확인하지 못했습니다.'
+    }
+  },
+  { immediate: true },
+)
+
+watch(
+  () => route.query.pending,
+  (pending) => {
+    logAuthDebug('watch:route.query.pending', {
+      pending,
+      reason: route.query.reason ?? '',
+      status: route.query.status ?? '',
+    })
+    if (pending === '1') {
+      showPendingModal.value = true
+      debugInfo.value.lastError = String(route.query.reason ?? '')
+      if (route.query.status) {
+        debugInfo.value.status = String(route.query.status)
+      }
+    }
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
   <main class="page">
     <section class="panel auth-panel">
       <header class="header-block">
-        <p class="eyebrow">Authentication</p>
-        <h1>로그인</h1>
-        <p class="sub">계정 인증 후 관리자 포털 기능을 사용할 수 있습니다.</p>
+        <h1>{{ mode === 'login' ? '로그인' : '회원가입' }}</h1>
         <p v-if="currentUserEmail" class="signed-in">현재 사용자: {{ currentUserEmail }}</p>
       </header>
 
-      <form class="form-grid" @submit.prevent="onSubmit">
+      <div class="mode-switch">
+        <button type="button" :class="{ active: mode === 'login' }" @click="switchMode('login')">로그인</button>
+        <button type="button" :class="{ active: mode === 'signup' }" @click="switchMode('signup')">
+          회원가입
+        </button>
+      </div>
+
+      <form v-if="mode === 'login'" class="form-grid" @submit.prevent="onSubmitLogin">
         <label class="field">
-          <span>이메일</span>
-          <input v-model="form.email" type="email" placeholder="coach@team.com" required>
+          <input v-model="form.email" type="email" placeholder="ID" required>
         </label>
 
         <label class="field">
-          <span>비밀번호</span>
-          <input v-model="form.password" type="password" placeholder="비밀번호" required>
+          <input v-model="form.password" type="password" placeholder="PASSWORD" required>
         </label>
 
-        <label class="checkbox">
+        <label class="checkbox remember">
           <input v-model="form.rememberMe" type="checkbox">
           <span>로그인 상태 유지</span>
         </label>
 
         <div class="actions">
-          <button type="submit" :disabled="loading" class="primary">
+          <button type="submit" :disabled="loading" class="primary block">
             {{ loading ? '처리 중...' : '로그인' }}
           </button>
-          <button type="button" :disabled="loading" @click="onGoogleLogin">Google로 로그인</button>
+          <button type="button" :disabled="loading" class="block ghost" @click="onGoogleLogin">
+            Google로 로그인
+          </button>
         </div>
-
-        <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
       </form>
+
+      <form v-else class="form-grid" @submit.prevent="onSubmitSignup">
+        <label class="field">
+          <input v-model="form.displayName" type="text" placeholder="이름" required>
+        </label>
+
+        <label class="field">
+          <input v-model="form.email" type="email" placeholder="이메일" required>
+        </label>
+
+        <label class="field">
+          <input v-model="form.password" type="password" placeholder="비밀번호" required>
+        </label>
+
+        <label class="field">
+          <input v-model="form.passwordConfirm" type="password" placeholder="비밀번호 확인" required>
+        </label>
+
+        <div class="actions">
+          <button type="submit" :disabled="loading" class="primary block">
+            {{ loading ? '처리 중...' : '회원가입 요청' }}
+          </button>
+        </div>
+      </form>
+
+      <div v-if="mode === 'login'" class="debug-panel">
+        <p><strong>debug uid:</strong> {{ debugInfo.uid || '-' }}</p>
+        <p><strong>debug orgId:</strong> {{ debugInfo.orgId || '-' }}</p>
+        <p><strong>debug path:</strong> {{ debugInfo.path || '-' }}</p>
+        <p><strong>debug exists:</strong> {{ String(debugInfo.exists) }}</p>
+        <p><strong>debug status:</strong> {{ debugInfo.status || '-' }}</p>
+        <p><strong>debug error:</strong> {{ debugInfo.lastError || '-' }}</p>
+      </div>
+
+      <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
+      <p v-if="successMessage" class="success">{{ successMessage }}</p>
     </section>
+
+    <div v-if="showPendingModal" class="modal-backdrop" @click.self="closePendingModal">
+      <article class="modal-panel">
+        <button type="button" class="modal-close" aria-label="닫기" @click="closePendingModal">×</button>
+        <h2>관리자 승인 대기</h2>
+        <p>아직 관리자 승인 대기 중입니다. 승인 완료 후 다시 로그인해주세요.</p>
+      </article>
+    </div>
   </main>
 </template>
 
 <style scoped>
 .page {
-  max-width: 1080px;
+  max-width: 760px;
   margin: 0 auto;
-  padding: 24px 16px 32px;
+  padding: 24px 16px;
 }
 
 .panel {
@@ -110,76 +361,99 @@ async function onGoogleLogin() {
 }
 
 .auth-panel {
-  max-width: 520px;
-}
-
-.eyebrow {
-  margin: 0;
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  color: var(--kw-text-soft);
-  text-transform: uppercase;
+  max-width: 540px;
+  margin: 0 auto;
+  padding: 30px 24px 24px;
+  overflow: hidden;
 }
 
 .header-block h1 {
-  margin: 6px 0 8px;
-  font-size: 28px;
-}
-
-.sub {
   margin: 0;
-  color: var(--kw-text-muted);
+  font-size: 28px;
+  text-align: center;
 }
 
 .signed-in {
-  margin: 8px 0 0;
+  margin: 10px 0 0;
+  text-align: center;
   color: #2563eb;
   font-size: 13px;
 }
 
-.form-grid {
-  display: grid;
-  gap: 12px;
+.mode-switch {
   margin-top: 14px;
-}
-
-.field {
   display: grid;
-  gap: 6px;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
 }
 
-.field span {
-  font-size: 13px;
+.mode-switch button {
+  height: 38px;
+  border: 1px solid var(--kw-line-strong);
+  border-radius: var(--kw-radius-sm);
+  background: var(--kw-surface-muted);
   color: var(--kw-text-muted);
 }
 
+.mode-switch button.active {
+  border-color: var(--kw-primary);
+  background: var(--kw-surface);
+  color: var(--kw-text);
+  font-weight: 600;
+}
+
+.form-grid {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.form-grid *,
+.form-grid *::before,
+.form-grid *::after {
+  box-sizing: border-box;
+}
+
+.field {
+  display: block;
+}
+
 .field input {
-  height: 40px;
+  width: 100%;
+  height: 42px;
   border: 1px solid var(--kw-line-strong);
-  border-radius: var(--kw-radius-sm);
+  border-radius: 999px;
   padding: 0 12px;
 }
 
-.checkbox {
+.checkbox.remember {
   display: flex;
   align-items: center;
   gap: 8px;
   color: var(--kw-text-muted);
-  font-size: 14px;
+  font-size: 13px;
+  margin-top: 2px;
+  padding-left: 2px;
 }
 
 .actions {
-  display: flex;
+  display: grid;
   gap: 8px;
+  margin-top: 4px;
 }
 
 .actions button {
-  height: 38px;
+  height: 42px;
   border: 1px solid var(--kw-line-strong);
-  border-radius: var(--kw-radius-sm);
+  border-radius: 999px;
   padding: 0 12px;
   background: var(--kw-surface);
   cursor: pointer;
+  font-size: 16px;
+}
+
+.actions .block {
+  width: 100%;
 }
 
 .actions .primary {
@@ -188,14 +462,85 @@ async function onGoogleLogin() {
   color: var(--kw-primary-contrast);
 }
 
+.actions .ghost {
+  background: #f8fafc;
+}
+
 .actions button:disabled {
   cursor: not-allowed;
   opacity: 0.6;
 }
 
 .error {
-  margin: 0;
+  margin: 10px 0 0;
   color: var(--kw-danger-text);
   font-size: 13px;
+  text-align: center;
+}
+
+.success {
+  margin: 10px 0 0;
+  color: var(--kw-success-text);
+  font-size: 13px;
+  text-align: center;
+}
+
+.debug-panel {
+  margin-top: 10px;
+  border: 1px dashed var(--kw-line-strong);
+  border-radius: 10px;
+  padding: 10px;
+  background: #f8fafc;
+  font-size: 12px;
+  color: #334155;
+}
+
+.debug-panel p {
+  margin: 4px 0;
+  word-break: break-all;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+
+.modal-panel {
+  width: min(420px, 100%);
+  background: var(--kw-surface);
+  border: 1px solid var(--kw-line);
+  border-radius: var(--kw-radius-md);
+  padding: 20px 18px 16px;
+  position: relative;
+  box-shadow: var(--kw-shadow-card);
+}
+
+.modal-panel h2 {
+  margin: 0 0 10px;
+  font-size: 22px;
+}
+
+.modal-panel p {
+  margin: 0;
+  color: var(--kw-text-muted);
+  line-height: 1.45;
+}
+
+.modal-close {
+  position: absolute;
+  right: 10px;
+  top: 8px;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--kw-line-strong);
+  border-radius: 50%;
+  background: var(--kw-surface-muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
 }
 </style>

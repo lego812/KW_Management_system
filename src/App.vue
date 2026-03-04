@@ -1,43 +1,77 @@
-<script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
-import { onAuthStateChanged } from 'firebase/auth'
-import { LayoutDashboard, LogIn, NotebookPen, Users } from 'lucide-vue-next'
-import { auth, hasFirebaseConfig } from './plugins/firebase'
+﻿<script setup>
+import { computed, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { storeToRefs } from 'pinia'
+import { LayoutDashboard, LogOut, NotebookPen, UserRound, Users } from 'lucide-vue-next'
+import { getMemberStatusDetail, signOutUser } from './api/auth'
+import { useAuthStore } from './stores/auth'
 
-const isLoggedIn = ref(false)
 const route = useRoute()
-let unsubscribe
+const router = useRouter()
+const authStore = useAuthStore()
+const { isLoggedIn, user } = storeToRefs(authStore)
+const currentRole = ref('USER')
+
+const isLoginPage = computed(() => route.name === 'login')
 const sectionTitle = computed(() => route.meta.section ?? 'KW SYSTEM')
-const sectionDescription = computed(
-  () => route.meta.description ?? '사이드바를 축소하면 더 효율적으로 콘텐츠를 확인할 수 있습니다.',
-)
+const sectionDescription = computed(() => route.meta.description ?? '사이드바에서 원하는 메뉴를 선택해 작업하세요.')
 
 const navItems = [
-  { to: '/', label: '대시보드', icon: LayoutDashboard },
+  { to: '/', label: '유저 현황', icon: UserRound, roles: ['ADMIN', 'COACH'] },
+  { to: '/dashboard', label: '대시보드', icon: LayoutDashboard },
   { to: '/players', label: '선수 관리', icon: Users },
   { to: '/tactics', label: '전술 관리', icon: NotebookPen },
-  { to: '/login', label: '로그인', icon: LogIn },
 ]
-const navIconSize = Number.parseInt(getComputedStyle(document.documentElement).getPropertyValue('--kw-icon-nav') || '14', 10)
+
+const visibleNavItems = computed(() =>
+  navItems.filter((item) => !item.roles || item.roles.includes(currentRole.value)),
+)
+
+const navIconSize = Number.parseInt(
+  getComputedStyle(document.documentElement).getPropertyValue('--kw-icon-nav') || '14',
+  10,
+)
 const navIconStroke = Number.parseFloat(
   getComputedStyle(document.documentElement).getPropertyValue('--kw-icon-stroke') || '1.9',
 )
 
-onMounted(() => {
-  if (!hasFirebaseConfig || !auth) return
-  unsubscribe = onAuthStateChanged(auth, (user) => {
-    isLoggedIn.value = !!user
-  })
-})
+async function onLogout() {
+  try {
+    await signOutUser()
+  } catch (error) {
+    console.error(error)
+  } finally {
+    router.push('/login')
+  }
+}
 
-onBeforeUnmount(() => {
-  unsubscribe?.()
-})
+watch(
+  user,
+  async (nextUser) => {
+    if (!nextUser) {
+      currentRole.value = 'USER'
+      return
+    }
+
+    try {
+      const detail = await getMemberStatusDetail(nextUser.uid)
+      currentRole.value = detail?.role ?? 'USER'
+    } catch {
+      currentRole.value = 'USER'
+    }
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
-  <div class="app-shell">
+  <main v-if="isLoginPage" class="login-shell">
+    <section class="login-frame">
+      <router-view />
+    </section>
+  </main>
+
+  <div v-else class="app-shell">
     <aside class="sidebar">
       <div class="brand">
         <span class="dot" />
@@ -49,7 +83,7 @@ onBeforeUnmount(() => {
 
       <nav class="nav">
         <router-link
-          v-for="item in navItems"
+          v-for="item in visibleNavItems"
           :key="item.to"
           :to="item.to"
           class="nav-link"
@@ -62,7 +96,10 @@ onBeforeUnmount(() => {
         </router-link>
       </nav>
 
-      <div v-if="isLoggedIn" class="login-badge">로그인 완료</div>
+      <button v-if="isLoggedIn" class="logout-btn" @click="onLogout">
+        <LogOut :size="14" :stroke-width="navIconStroke" />
+        로그아웃
+      </button>
     </aside>
 
     <section class="content-wrap">
@@ -78,6 +115,17 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(180deg, var(--kw-bg-start) 0%, var(--kw-bg-end) 100%);
+}
+
+.login-frame {
+  width: min(640px, 100%);
+}
+
 .app-shell {
   min-height: 100vh;
   display: grid;
@@ -197,16 +245,20 @@ onBeforeUnmount(() => {
   box-shadow: var(--kw-shadow-frame);
 }
 
-.login-badge {
+.logout-btn {
   margin-top: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 8px 12px;
-  border-radius: 999px;
+  border-radius: var(--kw-radius-sm);
   border: 1px solid var(--kw-success-line);
   background: var(--kw-success-bg);
   color: var(--kw-success-text);
   font-size: 13px;
   font-weight: 600;
   width: fit-content;
+  cursor: pointer;
 }
 
 @media (max-width: 960px) {
