@@ -11,7 +11,6 @@ import {
   signOutUser,
   signUpByEmail,
 } from '../api/auth'
-import { orgId } from '../plugins/firebase'
 import { useAuthStore } from '../stores/auth'
 
 const form = reactive({
@@ -32,24 +31,7 @@ const checkingStatus = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 const showPendingModal = ref(false)
-const debugInfo = ref({
-  uid: '',
-  orgId: orgId ?? '',
-  path: '',
-  exists: false,
-  status: '',
-  lastError: '',
-})
 const currentUserEmail = computed(() => user.value?.email ?? '')
-
-function logAuthDebug(step, payload = {}) {
-  console.info(`[KW_AUTH] ${step}`, {
-    origin: window.location.origin,
-    href: window.location.href,
-    route: route.fullPath,
-    ...payload,
-  })
-}
 
 function resetMessages() {
   errorMessage.value = ''
@@ -57,7 +39,6 @@ function resetMessages() {
 }
 
 function closePendingModal() {
-  logAuthDebug('closePendingModal', { pendingQuery: route.query.pending })
   showPendingModal.value = false
   if (route.query.pending === '1') {
     router.replace({ name: 'login' })
@@ -76,39 +57,17 @@ function isPendingByPermissionError(error) {
 }
 
 async function verifyApprovedOrShowPending(targetUser) {
-  logAuthDebug('verifyApprovedOrShowPending:start', {
-    uid: targetUser?.uid ?? '',
-    email: targetUser?.email ?? '',
-  })
   checkingStatus.value = true
   try {
     const detail = await getMemberStatusDetail(targetUser?.uid)
-    debugInfo.value = {
-      ...debugInfo.value,
-      ...detail,
-      lastError: '',
-    }
     const status = await getMemberStatus(targetUser?.uid)
-    debugInfo.value.status = status ?? ''
-    logAuthDebug('verifyApprovedOrShowPending:status', {
-      uid: targetUser?.uid ?? '',
-      status,
-      detail,
-    })
     if (status !== 'APPROVED') {
-      logAuthDebug('verifyApprovedOrShowPending:pending', { status })
       await signOutUser()
       showPendingModal.value = true
       return false
     }
-    logAuthDebug('verifyApprovedOrShowPending:approved', { status })
     return true
   } catch (error) {
-    logAuthDebug('verifyApprovedOrShowPending:error', {
-      code: error?.code ?? '',
-      message: error?.message ?? String(error),
-    })
-    debugInfo.value.lastError = String(error?.message ?? error ?? '')
     if (isPendingByPermissionError(error)) {
       await signOutUser()
       showPendingModal.value = true
@@ -121,30 +80,19 @@ async function verifyApprovedOrShowPending(targetUser) {
 }
 
 async function onSubmitLogin() {
-  logAuthDebug('onSubmitLogin:start', { email: form.email })
   resetMessages()
   closePendingModal()
   loading.value = true
   try {
     const credential = await signInByEmail(form.email, form.password)
-    logAuthDebug('onSubmitLogin:signInSuccess', {
-      uid: credential?.user?.uid ?? '',
-      email: credential?.user?.email ?? '',
-    })
     const approved = await verifyApprovedOrShowPending(credential.user)
     if (approved) {
-      logAuthDebug('onSubmitLogin:routerPushHome')
       await router.push('/')
     }
   } catch (error) {
-    logAuthDebug('onSubmitLogin:error', {
-      code: error?.code ?? '',
-      message: error?.message ?? String(error),
-    })
     errorMessage.value = error?.message ?? '로그인에 실패했습니다.'
   } finally {
     loading.value = false
-    logAuthDebug('onSubmitLogin:done')
   }
 }
 
@@ -184,55 +132,32 @@ async function onSubmitSignup() {
 }
 
 async function onGoogleLogin() {
-  logAuthDebug('onGoogleLogin:start')
   resetMessages()
   closePendingModal()
   loading.value = true
   try {
     const credential = await signInByGoogle()
-    logAuthDebug('onGoogleLogin:popupSuccess', {
-      uid: credential?.user?.uid ?? '',
-      email: credential?.user?.email ?? '',
-    })
     const approved = await verifyApprovedOrShowPending(credential.user)
     if (approved) {
-      logAuthDebug('onGoogleLogin:routerPushHome')
       await router.push('/')
     }
   } catch (error) {
-    logAuthDebug('onGoogleLogin:error', {
-      code: error?.code ?? '',
-      message: error?.message ?? String(error),
-    })
     errorMessage.value = error?.message ?? '구글 로그인에 실패했습니다.'
   } finally {
     loading.value = false
-    logAuthDebug('onGoogleLogin:done')
   }
 }
 
 watch(
   user,
   async (nextUser) => {
-    logAuthDebug('watch:user', {
-      uid: nextUser?.uid ?? '',
-      email: nextUser?.email ?? '',
-      mode: mode.value,
-      loading: loading.value,
-      checkingStatus: checkingStatus.value,
-    })
     if (!nextUser || mode.value !== 'login' || loading.value || checkingStatus.value) return
     try {
       const approved = await verifyApprovedOrShowPending(nextUser)
       if (approved) {
-        logAuthDebug('watch:user:routerPushHome')
         await router.push('/')
       }
     } catch (error) {
-      logAuthDebug('watch:user:error', {
-        code: error?.code ?? '',
-        message: error?.message ?? String(error),
-      })
       errorMessage.value = error?.message ?? '승인 상태를 확인하지 못했습니다.'
     }
   },
@@ -242,17 +167,8 @@ watch(
 watch(
   () => route.query.pending,
   (pending) => {
-    logAuthDebug('watch:route.query.pending', {
-      pending,
-      reason: route.query.reason ?? '',
-      status: route.query.status ?? '',
-    })
     if (pending === '1') {
       showPendingModal.value = true
-      debugInfo.value.lastError = String(route.query.reason ?? '')
-      if (route.query.status) {
-        debugInfo.value.status = String(route.query.status)
-      }
     }
   },
   { immediate: true },
@@ -321,15 +237,6 @@ watch(
           </button>
         </div>
       </form>
-
-      <div v-if="mode === 'login'" class="debug-panel">
-        <p><strong>debug uid:</strong> {{ debugInfo.uid || '-' }}</p>
-        <p><strong>debug orgId:</strong> {{ debugInfo.orgId || '-' }}</p>
-        <p><strong>debug path:</strong> {{ debugInfo.path || '-' }}</p>
-        <p><strong>debug exists:</strong> {{ String(debugInfo.exists) }}</p>
-        <p><strong>debug status:</strong> {{ debugInfo.status || '-' }}</p>
-        <p><strong>debug error:</strong> {{ debugInfo.lastError || '-' }}</p>
-      </div>
 
       <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
       <p v-if="successMessage" class="success">{{ successMessage }}</p>
@@ -483,21 +390,6 @@ watch(
   color: var(--kw-success-text);
   font-size: 13px;
   text-align: center;
-}
-
-.debug-panel {
-  margin-top: 10px;
-  border: 1px dashed var(--kw-line-strong);
-  border-radius: 10px;
-  padding: 10px;
-  background: #f8fafc;
-  font-size: 12px;
-  color: #334155;
-}
-
-.debug-panel p {
-  margin: 4px 0;
-  word-break: break-all;
 }
 
 .modal-backdrop {

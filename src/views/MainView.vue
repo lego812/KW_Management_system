@@ -1,5 +1,44 @@
 ﻿<script setup>
+import { computed, onMounted, ref } from 'vue'
 import { LogIn, NotebookPen, ShieldCheck, Users, Waypoints } from 'lucide-vue-next'
+import { fetchPlayers } from '../api/players'
+import { fetchTactics } from '../api/tactics'
+import { listUsers } from '../api/users'
+
+const loading = ref(false)
+const errorMessage = ref('')
+const approvedUsers = ref(0)
+const totalUsers = ref(0)
+const playersCount = ref(0)
+const tacticsCount = ref(0)
+
+const approvedUsersLabel = computed(() => (loading.value ? '...' : `${approvedUsers.value}명`))
+const playersLabel = computed(() => (loading.value ? '...' : `${playersCount.value}명`))
+const tacticsLabel = computed(() => (loading.value ? '...' : `${tacticsCount.value}개`))
+
+async function loadDashboardStats() {
+  loading.value = true
+  errorMessage.value = ''
+
+  try {
+    const [members, players, tactics] = await Promise.all([
+      listUsers(),
+      fetchPlayers(),
+      fetchTactics('ALL'),
+    ])
+
+    totalUsers.value = members.length
+    approvedUsers.value = members.filter((m) => m.status === 'APPROVED').length
+    playersCount.value = players.length
+    tacticsCount.value = tactics.length
+  } catch (error) {
+    errorMessage.value = error?.message ?? '대시보드 통계를 불러오지 못했습니다.'
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(loadDashboardStats)
 </script>
 
 <template>
@@ -12,21 +51,23 @@ import { LogIn, NotebookPen, ShieldCheck, Users, Waypoints } from 'lucide-vue-ne
       </div>
     </header>
 
+    <p v-if="errorMessage" class="error panel">{{ errorMessage }}</p>
+
     <section class="stats-grid">
       <article class="panel stat-card">
         <h2><ShieldCheck :size="16" :stroke-width="1.9" />승인 사용자</h2>
-        <strong>12명</strong>
-        <p>최근 7일 +2</p>
+        <strong>{{ approvedUsersLabel }}</strong>
+        <p>전체 사용자 {{ totalUsers }}명</p>
       </article>
       <article class="panel stat-card">
         <h2><Users :size="16" :stroke-width="1.9" />등록 선수</h2>
-        <strong>43명</strong>
-        <p>활성 선수 39명</p>
+        <strong>{{ playersLabel }}</strong>
+        <p>활성 선수 기준 집계</p>
       </article>
       <article class="panel stat-card">
         <h2><Waypoints :size="16" :stroke-width="1.9" />전술 보드</h2>
-        <strong>27개</strong>
-        <p>이번 주 버전 저장 8건</p>
+        <strong>{{ tacticsLabel }}</strong>
+        <p>삭제 제외 보드 기준</p>
       </article>
     </section>
 
@@ -83,6 +124,12 @@ import { LogIn, NotebookPen, ShieldCheck, Users, Waypoints } from 'lucide-vue-ne
 .sub {
   margin: 0;
   color: var(--kw-text-muted);
+}
+
+.error {
+  margin: 0;
+  color: var(--kw-danger-text);
+  font-size: 13px;
 }
 
 .stats-grid {
