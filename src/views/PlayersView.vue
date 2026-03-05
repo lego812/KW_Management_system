@@ -6,7 +6,6 @@ import { createPlayer, fetchPlayers, softDeletePlayer, updatePlayer } from '../a
 
 const OFFENSE_OPTIONS = ['QB', 'RB', 'OL', 'TE', 'WR']
 const DEFENSE_OPTIONS = ['DL', 'LB', 'C', 'S']
-const SPECIAL_OPTIONS = ['K', 'S']
 const STATUS_OPTIONS = ['재학', '휴학', '부상']
 
 const keyword = ref('')
