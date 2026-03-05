@@ -81,3 +81,21 @@ export async function approveMember(memberId) {
     updatedAt: serverTimestamp(),
   })
 }
+
+export async function updateMemberRole(memberId, role) {
+  ensureFirestore()
+  const adminUid = auth.currentUser?.uid
+  if (!adminUid) {
+    throw new Error('로그인 정보가 없어 권한을 변경할 수 없습니다.')
+  }
+
+  const normalizedRole = String(role ?? '').toUpperCase()
+  if (!['COACH', 'USER'].includes(normalizedRole)) {
+    throw new Error('권한은 COACH 또는 USER만 설정할 수 있습니다.')
+  }
+
+  await updateDoc(memberDoc(memberId), {
+    role: normalizedRole,
+    updatedAt: serverTimestamp(),
+  })
+}

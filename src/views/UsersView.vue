@@ -1,21 +1,26 @@
 ﻿<script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Check, RefreshCw, ShieldCheck, Users, UserRound } from 'lucide-vue-next'
-import { approveMember, getMyMemberProfile, listUsers } from '../api/users'
+import { approveMember, getMyMemberProfile, listUsers, updateMemberRole } from '../api/users'
 
 const loading = ref(false)
 const errorMessage = ref('')
 const users = ref([])
 const myRole = ref('USER')
 const myStatus = ref('PENDING')
+const myUid = ref('')
 const approveLoadingId = ref('')
+const roleLoadingId = ref('')
 const actionMessage = ref('')
+let actionMessageTimer = null
 
 const isAdmin = computed(() => myRole.value === 'ADMIN')
 const totalCount = computed(() => users.value.length)
 const approvedCount = computed(() => users.value.filter((u) => u.status === 'APPROVED').length)
-const pendingCount = computed(() => users.value.filter((u) => u.status === 'PENDING').length)
+const pendingCount = computed(() => users.value.filter((u) => u.status !== 'APPROVED').length)
 const adminCount = computed(() => users.value.filter((u) => u.role === 'ADMIN').length)
+const coachCount = computed(() => users.value.filter((u) => u.role === 'COACH').length)
+const userCount = computed(() => users.value.filter((u) => u.role === 'USER').length)
 
 function formatDate(value) {
   if (!value) return '-'
@@ -31,13 +36,22 @@ function formatDate(value) {
   }).format(date)
 }
 
+function setActionMessage(message) {
+  actionMessage.value = message
+  if (actionMessageTimer) clearTimeout(actionMessageTimer)
+  actionMessageTimer = setTimeout(() => {
+    actionMessage.value = ''
+    actionMessageTimer = null
+  }, 5000)
+}
+
 async function loadUsers() {
   loading.value = true
   errorMessage.value = ''
   try {
     users.value = await listUsers()
   } catch (error) {
-    errorMessage.value = error?.message ?? '유저 목록을 불러오지 못했습니다.'
+    errorMessage.value = error?.message ?? '유저 통계를 불러오지 못했습니다.'
   } finally {
     loading.value = false
   }
@@ -48,6 +62,7 @@ async function loadMyProfile() {
     const me = await getMyMemberProfile()
     myRole.value = me?.role ?? 'USER'
     myStatus.value = me?.status ?? 'PENDING'
+    myUid.value = me?.uid ?? ''
   } catch (error) {
     errorMessage.value = error?.message ?? '내 권한 정보를 확인하지 못했습니다.'
   }
@@ -58,11 +73,10 @@ async function onApprove(member) {
 
   approveLoadingId.value = member.id
   errorMessage.value = ''
-  actionMessage.value = ''
 
   try {
     await approveMember(member.id)
-    actionMessage.value = `${member.name || member.email || member.id} 계정을 승인했습니다.`
+    setActionMessage(`${member.name || member.email || member.id} 계정을 승인했습니다.`)
     await loadUsers()
   } catch (error) {
     errorMessage.value = error?.message ?? '승인 처리에 실패했습니다.'
@@ -71,9 +85,34 @@ async function onApprove(member) {
   }
 }
 
+async function onChangeRole(member, nextRole) {
+  if (!isAdmin.value) return
+  if (!member?.id || member.id === myUid.value || member.role === 'ADMIN') return
+  if (!['COACH', 'USER'].includes(String(nextRole))) return
+  if (String(member.role) === String(nextRole)) return
+  roleLoadingId.value = member.id
+  errorMessage.value = ''
+  try {
+    await updateMemberRole(member.id, nextRole)
+    setActionMessage(`${member.name || member.email || member.id} 권한을 ${nextRole}(으)로 변경했습니다.`)
+    await loadUsers()
+  } catch (error) {
+    errorMessage.value = error?.message ?? '권한 변경에 실패했습니다.'
+  } finally {
+    roleLoadingId.value = ''
+  }
+}
+
 onMounted(async () => {
   await loadMyProfile()
   await loadUsers()
+})
+
+onBeforeUnmount(() => {
+  if (actionMessageTimer) {
+    clearTimeout(actionMessageTimer)
+    actionMessageTimer = null
+  }
 })
 </script>
 
@@ -82,27 +121,17 @@ onMounted(async () => {
     <header class="panel header-panel">
       <p class="eyebrow">User Overview</p>
       <h1><UserRound :size="22" :stroke-width="1.9" />유저 통합 현황</h1>
-      <p class="sub">조직 멤버의 권한, 승인 상태, 가입 시점을 한 화면에서 확인합니다.</p>
+      <p class="sub">유저 승인 상태와 권한 분포를 확인합니다.</p>
       <p class="meta">내 권한: {{ myRole }} / 내 상태: {{ myStatus }}</p>
     </header>
 
     <section class="stats-grid">
-      <article class="panel stat-card">
-        <h2><Users :size="16" :stroke-width="1.9" />전체 유저</h2>
-        <strong>{{ totalCount }}명</strong>
-      </article>
-      <article class="panel stat-card">
-        <h2><ShieldCheck :size="16" :stroke-width="1.9" />승인 완료</h2>
-        <strong>{{ approvedCount }}명</strong>
-      </article>
-      <article class="panel stat-card">
-        <h2><ShieldCheck :size="16" :stroke-width="1.9" />승인 대기</h2>
-        <strong>{{ pendingCount }}명</strong>
-      </article>
-      <article class="panel stat-card">
-        <h2><ShieldCheck :size="16" :stroke-width="1.9" />관리자</h2>
-        <strong>{{ adminCount }}명</strong>
-      </article>
+      <article class="panel stat-card"><h2><Users :size="16" :stroke-width="1.9" />전체</h2><strong>{{ totalCount }}명</strong></article>
+      <article class="panel stat-card"><h2><ShieldCheck :size="16" :stroke-width="1.9" />승인</h2><strong>{{ approvedCount }}명</strong></article>
+      <article class="panel stat-card"><h2><ShieldCheck :size="16" :stroke-width="1.9" />대기</h2><strong>{{ pendingCount }}명</strong></article>
+      <article class="panel stat-card"><h2><ShieldCheck :size="16" :stroke-width="1.9" />ADMIN</h2><strong>{{ adminCount }}명</strong></article>
+      <article class="panel stat-card"><h2><ShieldCheck :size="16" :stroke-width="1.9" />COACH</h2><strong>{{ coachCount }}명</strong></article>
+      <article class="panel stat-card"><h2><ShieldCheck :size="16" :stroke-width="1.9" />USER</h2><strong>{{ userCount }}명</strong></article>
     </section>
 
     <section class="panel">
@@ -113,7 +142,7 @@ onMounted(async () => {
         </button>
       </div>
 
-      <p v-if="!isAdmin" class="notice">현재 계정은 관리자 권한이 아니므로 승인 처리 버튼이 표시되지 않습니다.</p>
+      <p v-if="!isAdmin" class="notice">관리자 권한이 아니면 승인 버튼이 보이지 않습니다.</p>
       <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
       <p v-if="actionMessage" class="success">{{ actionMessage }}</p>
 
@@ -133,12 +162,23 @@ onMounted(async () => {
             <tr v-for="member in users" :key="member.id">
               <td>{{ member.name || '-' }}</td>
               <td>{{ member.email || '-' }}</td>
-              <td>{{ member.role }}</td>
               <td>
-                <span class="status" :class="{ pending: member.status !== 'APPROVED' }">
-                  {{ member.status }}
-                </span>
+                <div class="role-cell">
+                  <template v-if="isAdmin && member.id !== myUid && member.role !== 'ADMIN'">
+                    <select
+                      class="role-select"
+                      :value="member.role"
+                      :disabled="roleLoadingId === member.id"
+                      @change="onChangeRole(member, $event.target.value)"
+                    >
+                      <option value="COACH">COACH</option>
+                      <option value="USER">USER</option>
+                    </select>
+                  </template>
+                  <span v-else>{{ member.role }}</span>
+                </div>
               </td>
+              <td><span class="status" :class="{ pending: member.status !== 'APPROVED' }">{{ member.status }}</span></td>
               <td>{{ formatDate(member.createdAt) }}</td>
               <td>
                 <button
@@ -165,183 +205,56 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.page {
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: 24px 16px 32px;
-  display: grid;
-  gap: 12px;
-}
+.page { max-width: 1080px; margin: 0 auto; padding: 24px 16px 32px; display: grid; gap: 12px; }
+.panel { background: var(--kw-surface); border: 1px solid var(--kw-line); border-radius: var(--kw-radius-lg); padding: 18px; box-shadow: var(--kw-shadow-card); }
+.eyebrow { margin: 0; font-size: 12px; letter-spacing: 0.08em; color: var(--kw-text-soft); text-transform: uppercase; }
+.header-panel h1 { margin: 6px 0 8px; font-size: 28px; display: flex; align-items: center; gap: 8px; }
+.sub { margin: 0; color: var(--kw-text-muted); }
+.meta { margin: 10px 0 0; color: var(--kw-text-soft); font-size: 13px; }
 
-.panel {
-  background: var(--kw-surface);
-  border: 1px solid var(--kw-line);
-  border-radius: var(--kw-radius-lg);
-  padding: 18px;
-  box-shadow: var(--kw-shadow-card);
-}
+.stats-grid { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: 12px; }
+.stat-card h2 { margin: 0; font-size: 13px; color: var(--kw-text-soft); font-weight: 500; display: flex; align-items: center; gap: 6px; }
+.stat-card strong { display: block; margin-top: 8px; font-size: 28px; line-height: 1; }
 
-.eyebrow {
-  margin: 0;
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  color: var(--kw-text-soft);
-  text-transform: uppercase;
-}
+.toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.toolbar button { display: inline-flex; align-items: center; gap: 6px; height: 36px; border: 1px solid var(--kw-line-strong); border-radius: var(--kw-radius-sm); padding: 0 12px; background: var(--kw-surface); }
 
-.header-panel h1 {
-  margin: 6px 0 8px;
-  font-size: 28px;
-  display: flex;
+.notice { margin: 0 0 10px; color: #92400e; background: #fffbeb; border: 1px solid #fcd34d; border-radius: 10px; padding: 8px 10px; font-size: 13px; }
+.error { margin: 0 0 12px; color: var(--kw-danger-text); font-size: 13px; }
+.success { margin: 0 0 12px; color: var(--kw-success-text); font-size: 13px; }
+
+.table-wrap { border: 1px solid var(--kw-line); border-radius: var(--kw-radius-md); overflow: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 11px 12px; border-bottom: 1px solid #eceff3; text-align: left; font-size: 14px; }
+th { background: var(--kw-surface-muted); color: var(--kw-text-muted); font-weight: 600; }
+
+.status { display: inline-block; border: 1px solid var(--kw-success-line); background: var(--kw-success-bg); color: var(--kw-success-text); border-radius: 999px; padding: 2px 8px; font-size: 12px; }
+.status.pending { border-color: #f59e0b; background: #fff7ed; color: #b45309; }
+
+.approve-btn { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--kw-primary); border-radius: 8px; background: var(--kw-primary); color: var(--kw-primary-contrast); height: 30px; padding: 0 10px; }
+.approve-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.dash { color: var(--kw-text-soft); }
+
+.role-cell {
+  display: inline-flex;
   align-items: center;
   gap: 8px;
 }
 
-.sub {
-  margin: 0;
-  color: var(--kw-text-muted);
-}
-
-.meta {
-  margin: 10px 0 0;
-  color: var(--kw-text-soft);
-  font-size: 13px;
-}
-
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(120px, 1fr));
-  gap: 12px;
-}
-
-.stat-card h2 {
-  margin: 0;
-  font-size: 13px;
-  color: var(--kw-text-soft);
-  font-weight: 500;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.stat-card strong {
-  display: block;
-  margin-top: 8px;
-  font-size: 28px;
-  line-height: 1;
-}
-
-.toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-
-.toolbar button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 36px;
+.role-select {
+  height: 28px;
   border: 1px solid var(--kw-line-strong);
-  border-radius: var(--kw-radius-sm);
-  padding: 0 12px;
-  background: var(--kw-surface);
-}
-
-.notice {
-  margin: 0 0 10px;
-  color: #92400e;
-  background: #fffbeb;
-  border: 1px solid #fcd34d;
-  border-radius: 10px;
-  padding: 8px 10px;
-  font-size: 13px;
-}
-
-.error {
-  margin: 0 0 12px;
-  color: var(--kw-danger-text);
-  font-size: 13px;
-}
-
-.success {
-  margin: 0 0 12px;
-  color: var(--kw-success-text);
-  font-size: 13px;
-}
-
-.table-wrap {
-  border: 1px solid var(--kw-line);
-  border-radius: var(--kw-radius-md);
-  overflow: auto;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-th,
-td {
-  padding: 11px 12px;
-  border-bottom: 1px solid #eceff3;
-  text-align: left;
-  font-size: 14px;
-}
-
-th {
-  background: var(--kw-surface-muted);
-  color: var(--kw-text-muted);
-  font-weight: 600;
-}
-
-.status {
-  display: inline-block;
-  border: 1px solid var(--kw-success-line);
-  background: var(--kw-success-bg);
-  color: var(--kw-success-text);
-  border-radius: 999px;
-  padding: 2px 8px;
+  border-radius: 8px;
+  background: #fff;
+  padding: 0 8px;
   font-size: 12px;
 }
 
-.status.pending {
-  border-color: #f59e0b;
-  background: #fff7ed;
-  color: #b45309;
-}
-
-.approve-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border: 1px solid var(--kw-primary);
-  border-radius: 8px;
-  background: var(--kw-primary);
-  color: var(--kw-primary-contrast);
-  height: 30px;
-  padding: 0 10px;
-}
-
-.approve-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.dash {
-  color: var(--kw-text-soft);
-}
-
 @media (max-width: 960px) {
-  .stats-grid {
-    grid-template-columns: 1fr 1fr;
-  }
+  .stats-grid { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 640px) {
-  .stats-grid {
-    grid-template-columns: 1fr;
-  }
+  .stats-grid { grid-template-columns: 1fr; }
 }
 </style>

@@ -1,4 +1,4 @@
-import {
+﻿import {
   addDoc,
   collection,
   doc,
@@ -50,6 +50,8 @@ export async function fetchPlayers() {
       offensePositions,
       defensePositions,
       specialPositions,
+      studentNo: data.studentNo ?? '',
+      remark: data.remark ?? '',
     }
   })
 }
@@ -76,6 +78,7 @@ export async function createPlayer(input) {
     traits: input.traits ?? { speed: 0, power: 0, agility: 0, iq: 0 },
     tags: input.tags ?? [],
     status: input.status ?? '재학',
+    remark: input.remark ?? '',
     isDeleted: false,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -101,6 +104,7 @@ export async function updatePlayer(playerId, input) {
     weightKg: input.weightKg ?? null,
     studentNo: input.studentNo ?? '',
     department: input.department ?? '',
+    remark: input.remark ?? '',
     updatedAt: serverTimestamp(),
   })
 }

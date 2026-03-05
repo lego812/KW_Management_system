@@ -7,8 +7,7 @@
   signOut,
 } from 'firebase/auth'
 import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore'
-import { db, orgId } from '../plugins/firebase'
-import { auth, hasFirebaseConfig } from '../plugins/firebase'
+import { db, orgId, auth, hasFirebaseConfig} from '../plugins/firebase'
 
 const provider = new GoogleAuthProvider()
 

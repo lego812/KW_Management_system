@@ -1,8 +1,8 @@
 ﻿<script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
-import { RefreshCw, Users } from 'lucide-vue-next'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { RefreshCw, Trash2, Users } from 'lucide-vue-next'
 import { getMemberStatusDetail } from '../api/auth'
-import { fetchPlayers, updatePlayer } from '../api/players'
+import { createPlayer, fetchPlayers, softDeletePlayer, updatePlayer } from '../api/players'
 
 const OFFENSE_OPTIONS = ['QB', 'RB', 'OL', 'TE', 'WR']
 const DEFENSE_OPTIONS = ['DL', 'LB', 'C', 'S']
@@ -12,11 +12,14 @@ const STATUS_OPTIONS = ['재학', '휴학', '부상']
 const keyword = ref('')
 const loading = ref(false)
 const saving = ref(false)
+const creating = ref(false)
+const deletingId = ref('')
 const errorMessage = ref('')
 const actionMessage = ref('')
 const players = ref([])
 
 const editMode = ref(false)
+const createMode = ref(false)
 const canEditPlayers = ref(false)
 const myRole = ref('USER')
 
@@ -24,6 +27,7 @@ const editRows = reactive({})
 const sortBy = reactive({
   number: 'none',
   name: 'none',
+  studentNo: 'none',
   offense: 'none',
   defense: 'none',
   special: 'none',
@@ -31,41 +35,116 @@ const sortBy = reactive({
   heightCm: 'none',
   weightKg: 'none',
 })
-const openMenuKey = ref('')
+const SORT_KEYS = ['number', 'name', 'studentNo', 'offense', 'defense', 'special', 'status', 'heightCm', 'weightKg']
+
+const newPlayer = reactive({
+  number: '',
+  name: '',
+  studentNo: '',
+  offense: '',
+  defense: '',
+  specialK: false,
+  specialS: false,
+  status: '재학',
+  heightCm: '',
+  weightKg: '',
+  remark: '',
+})
+
+let actionMessageTimer = null
 
 const filteredPlayers = computed(() => {
   const q = keyword.value.trim().toLowerCase()
   const base = !q
     ? [...players.value]
     : players.value.filter((p) => {
-      const offense = (p.offensePositions || []).join(',').toLowerCase()
-      const defense = (p.defensePositions || []).join(',').toLowerCase()
-      const special = (p.specialPositions || []).join(',').toLowerCase()
-
       return (
         String(p.name ?? '').toLowerCase().includes(q) ||
-        offense.includes(q) ||
-        defense.includes(q) ||
-        special.includes(q) ||
-        String(p.number ?? '').includes(q)
+        String(p.number ?? '').includes(q) ||
+        String(p.studentNo ?? '').includes(q) ||
+        String(p.remark ?? '').toLowerCase().includes(q) ||
+        (p.offensePositions || []).join(',').toLowerCase().includes(q) ||
+        (p.defensePositions || []).join(',').toLowerCase().includes(q) ||
+        (p.specialPositions || []).join(',').toLowerCase().includes(q)
       )
     })
 
-  const orderedKeys = ['number', 'name', 'offense', 'defense', 'special', 'status', 'heightCm', 'weightKg']
-  return base.sort((a, b) => {
-    for (const key of orderedKeys) {
-      const direction = sortBy[key]
-      if (!direction || direction === 'none') continue
-      const cmp = compareByKey(a, b, key, direction)
-      if (cmp !== 0) return cmp
-    }
-    return 0
-  })
+  const activeKey = SORT_KEYS.find((key) => sortBy[key] && sortBy[key] !== 'none')
+  if (!activeKey) return base
+  const direction = sortBy[activeKey]
+  return base.sort((a, b) => compareByKey(a, b, activeKey, direction))
 })
+
+const activeSortKey = computed(() => SORT_KEYS.find((key) => sortBy[key] && sortBy[key] !== 'none') || '')
+
+function sanitizeStudentNo(value) {
+  const digits = String(value ?? '').replace(/\D/g, '')
+  return digits.slice(0, 2)
+}
+
+function setActionMessage(message) {
+  actionMessage.value = message
+  if (actionMessageTimer) clearTimeout(actionMessageTimer)
+  actionMessageTimer = setTimeout(() => {
+    actionMessage.value = ''
+    actionMessageTimer = null
+  }, 5000)
+}
 
 function resetMessages() {
   errorMessage.value = ''
   actionMessage.value = ''
+  if (actionMessageTimer) {
+    clearTimeout(actionMessageTimer)
+    actionMessageTimer = null
+  }
+}
+
+function resetSorts() {
+  Object.keys(sortBy).forEach((key) => {
+    sortBy[key] = 'none'
+  })
+}
+
+function isSortDisabled(key) {
+  return Boolean(activeSortKey.value) && activeSortKey.value !== key
+}
+
+function onSortChange(key, value) {
+  if (value === 'none') {
+    sortBy[key] = 'none'
+    return
+  }
+  SORT_KEYS.forEach((k) => {
+    sortBy[k] = k === key ? value : 'none'
+  })
+}
+
+function resetNewPlayer() {
+  newPlayer.number = ''
+  newPlayer.name = ''
+  newPlayer.studentNo = ''
+  newPlayer.offense = ''
+  newPlayer.defense = ''
+  newPlayer.specialK = false
+  newPlayer.specialS = false
+  newPlayer.status = '재학'
+  newPlayer.heightCm = ''
+  newPlayer.weightKg = ''
+  newPlayer.remark = ''
+}
+
+function toNullableNumber(value) {
+  if (value === '' || value == null) return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+function toSpecialList(row) {
+  const list = []
+  if (row.specialK) list.push('K')
+  if (row.specialS) list.push('S')
+  return list
 }
 
 function ensureEditRows() {
@@ -73,47 +152,25 @@ function ensureEditRows() {
     editRows[p.id] = {
       number: p.number == null ? '' : String(p.number),
       name: String(p.name ?? ''),
+      studentNo: sanitizeStudentNo(p.studentNo ?? ''),
+      offense: Array.isArray(p.offensePositions) && p.offensePositions[0] ? p.offensePositions[0] : '',
+      defense: Array.isArray(p.defensePositions) && p.defensePositions[0] ? p.defensePositions[0] : '',
+      specialK: Array.isArray(p.specialPositions) ? p.specialPositions.includes('K') : false,
+      specialS: Array.isArray(p.specialPositions) ? p.specialPositions.includes('S') : false,
       status: p.status ?? '재학',
-      offensePositions: Array.isArray(p.offensePositions) ? [...p.offensePositions] : [],
-      defensePositions: Array.isArray(p.defensePositions) ? [...p.defensePositions] : [],
-      specialPositions: Array.isArray(p.specialPositions) ? [...p.specialPositions] : [],
       heightCm: p.heightCm == null ? '' : String(p.heightCm),
       weightKg: p.weightKg == null ? '' : String(p.weightKg),
+      remark: String(p.remark ?? ''),
     }
   })
-}
-
-function togglePosition(playerId, key, value) {
-  const row = editRows[playerId]
-  if (!row) return
-
-  const list = row[key]
-  const idx = list.indexOf(value)
-  if (idx >= 0) {
-    list.splice(idx, 1)
-  } else {
-    list.push(value)
-  }
-}
-
-function menuKey(playerId, key) {
-  return `${playerId}:${key}`
-}
-
-function togglePositionMenu(playerId, key) {
-  const mk = menuKey(playerId, key)
-  openMenuKey.value = openMenuKey.value === mk ? '' : mk
-}
-
-function isPositionMenuOpen(playerId, key) {
-  return openMenuKey.value === menuKey(playerId, key)
 }
 
 function getSortValue(player, key) {
   if (key === 'number') return Number(player.number ?? 0)
   if (key === 'name') return String(player.name ?? '')
-  if (key === 'offense') return (player.offensePositions || []).join(',')
-  if (key === 'defense') return (player.defensePositions || []).join(',')
+  if (key === 'studentNo') return Number(player.studentNo ?? -1)
+  if (key === 'offense') return (player.offensePositions || [])[0] ?? ''
+  if (key === 'defense') return (player.defensePositions || [])[0] ?? ''
   if (key === 'special') return (player.specialPositions || []).join(',')
   if (key === 'status') return String(player.status ?? '재학')
   if (key === 'heightCm') return Number(player.heightCm ?? -1)
@@ -127,105 +184,58 @@ function compareValues(a, b) {
 }
 
 function compareByKey(a, b, key, direction) {
-  if (key === 'number' || key === 'heightCm' || key === 'weightKg') {
-    const av = getSortValue(a, key)
-    const bv = getSortValue(b, key)
-    const cmp = compareValues(av, bv)
+  if (key === 'number' || key === 'heightCm' || key === 'weightKg' || key === 'studentNo') {
+    const cmp = compareValues(getSortValue(a, key), getSortValue(b, key))
     return direction === 'desc' ? -cmp : cmp
   }
 
   if (key === 'name') {
-    const av = String(a.name ?? '')
-    const bv = String(b.name ?? '')
-    const cmp = av.localeCompare(bv, 'ko')
+    const cmp = compareValues(String(a.name ?? ''), String(b.name ?? ''))
     return direction === 'ko_desc' ? -cmp : cmp
   }
 
   if (key === 'offense' || key === 'defense') {
-    const selected = String(direction)
-    const listKey = key === 'offense' ? 'offensePositions' : 'defensePositions'
-    const order = key === 'offense' ? OFFENSE_OPTIONS : DEFENSE_OPTIONS
-    if (selected === 'group') {
-      const getIndex = (item) => {
-        const list = item[listKey] || []
-        const indices = list.map((v) => order.indexOf(v)).filter((v) => v >= 0)
-        if (indices.length === 0) return Number.MAX_SAFE_INTEGER
-        return Math.min(...indices)
-      }
-      const ai = getIndex(a)
-      const bi = getIndex(b)
-      if (ai !== bi) return ai - bi
-    } else {
-      const aHas = (a[listKey] || []).includes(selected)
-      const bHas = (b[listKey] || []).includes(selected)
-      if (aHas !== bHas) return aHas ? -1 : 1
+    if (direction === 'group') {
+      const order = key === 'offense' ? OFFENSE_OPTIONS : DEFENSE_OPTIONS
+      const av = (a[key === 'offense' ? 'offensePositions' : 'defensePositions'] || [])[0] ?? ''
+      const bv = (b[key === 'offense' ? 'offensePositions' : 'defensePositions'] || [])[0] ?? ''
+      const ai = order.indexOf(av)
+      const bi = order.indexOf(bv)
+      if (ai !== bi) return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi)
+      return 0
     }
-    const av = (a[listKey] || []).join(',')
-    const bv = (b[listKey] || []).join(',')
-    return av.localeCompare(bv, 'ko')
+    return compareValues(getSortValue(a, key), getSortValue(b, key))
   }
 
   if (key === 'status') {
-    const selected = String(direction)
-    const statusOrder = STATUS_OPTIONS
-    const aStatus = String(a.status ?? '재학')
-    const bStatus = String(b.status ?? '재학')
-    if (selected === 'group') {
-      const ai = statusOrder.indexOf(aStatus)
-      const bi = statusOrder.indexOf(bStatus)
-      if (ai !== bi) return ai - bi
-      return aStatus.localeCompare(bStatus, 'ko')
+    if (direction === 'group') {
+      const order = STATUS_OPTIONS
+      const ai = order.indexOf(String(a.status ?? '재학'))
+      const bi = order.indexOf(String(b.status ?? '재학'))
+      if (ai !== bi) return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi)
+      return 0
     }
-    const aHas = aStatus === selected
-    const bHas = bStatus === selected
-    if (aHas !== bHas) return aHas ? -1 : 1
-    return aStatus.localeCompare(bStatus, 'ko')
+    return compareValues(getSortValue(a, key), getSortValue(b, key))
   }
 
-  const av = getSortValue(a, key)
-  const bv = getSortValue(b, key)
-  const cmp = compareValues(av, bv)
-  return direction === 'desc' ? -cmp : cmp
-}
-
-function toNullableNumber(value) {
-  if (value === '' || value == null) return null
-  const n = Number(value)
-  return Number.isFinite(n) ? n : null
-}
-
-function sortedList(list) {
-  return Array.isArray(list) ? [...list].sort() : []
-}
-
-function isSameList(a, b) {
-  const aa = sortedList(a)
-  const bb = sortedList(b)
-  if (aa.length !== bb.length) return false
-  return aa.every((v, i) => v === bb[i])
+  return compareValues(getSortValue(a, key), getSortValue(b, key))
 }
 
 function isChanged(player, row) {
-  const currentNumber = player.number == null ? null : Number(player.number)
-  const nextNumber = toNullableNumber(row.number)
-  const currentName = String(player.name ?? '').trim()
-  const nextName = String(row.name ?? '').trim()
-  const currentStatus = player.status ?? '재학'
-  const nextStatus = row.status ?? '재학'
-  const currentHeight = player.heightCm == null ? null : Number(player.heightCm)
-  const nextHeight = toNullableNumber(row.heightCm)
-  const currentWeight = player.weightKg == null ? null : Number(player.weightKg)
-  const nextWeight = toNullableNumber(row.weightKg)
+  const currentSpecial = (player.specialPositions || []).slice().sort().join(',')
+  const nextSpecial = toSpecialList(row).slice().sort().join(',')
 
   return (
-    currentNumber !== nextNumber ||
-    currentName !== nextName ||
-    currentStatus !== nextStatus ||
-    currentHeight !== nextHeight ||
-    currentWeight !== nextWeight ||
-    !isSameList(player.offensePositions, row.offensePositions) ||
-    !isSameList(player.defensePositions, row.defensePositions) ||
-    !isSameList(player.specialPositions, row.specialPositions)
+    Number(player.number ?? 0) !== Number(toNullableNumber(row.number) ?? 0) ||
+    String(player.name ?? '').trim() !== String(row.name ?? '').trim() ||
+    sanitizeStudentNo(player.studentNo ?? '') !== sanitizeStudentNo(row.studentNo ?? '') ||
+    ((player.offensePositions || [])[0] ?? '') !== (row.offense || '') ||
+    ((player.defensePositions || [])[0] ?? '') !== (row.defense || '') ||
+    currentSpecial !== nextSpecial ||
+    String(player.status ?? '재학') !== String(row.status ?? '재학') ||
+    Number(player.heightCm ?? -1) !== Number(toNullableNumber(row.heightCm) ?? -1) ||
+    Number(player.weightKg ?? -1) !== Number(toNullableNumber(row.weightKg) ?? -1) ||
+    String(player.remark ?? '') !== String(row.remark ?? '')
   )
 }
 
@@ -241,27 +251,24 @@ async function saveAllEdits() {
       if (!row || !isChanged(player, row)) continue
 
       changedCount += 1
-      const updatedNumber = toNullableNumber(row.number)
       await updatePlayer(player.id, {
         name: String(row.name ?? '').trim(),
-        number: updatedNumber ?? Number(player.number ?? 0),
+        number: toNullableNumber(row.number) ?? Number(player.number ?? 0),
+        studentNo: sanitizeStudentNo(row.studentNo),
+        offensePositions: row.offense ? [row.offense] : [],
+        defensePositions: row.defense ? [row.defense] : [],
+        specialPositions: toSpecialList(row),
         status: row.status,
-        offensePositions: row.offensePositions,
-        defensePositions: row.defensePositions,
-        specialPositions: row.specialPositions,
         heightCm: toNullableNumber(row.heightCm),
         weightKg: toNullableNumber(row.weightKg),
         age: player.age ?? null,
-        studentNo: player.studentNo ?? '',
         department: player.department ?? '',
+        remark: String(row.remark ?? ''),
       })
     }
 
-    if (changedCount === 0) {
-      actionMessage.value = '변경된 내용이 없습니다.'
-    } else {
-      actionMessage.value = `${changedCount}명 선수 정보를 저장했습니다.`
-    }
+    if (changedCount === 0) setActionMessage('변경된 내용이 없습니다.')
+    else setActionMessage(`${changedCount}명 선수 정보를 저장했습니다.`)
 
     await loadPlayers()
     return true
@@ -277,22 +284,85 @@ async function toggleEditMode() {
   if (!canEditPlayers.value) return
   if (!editMode.value) {
     ensureEditRows()
-    openMenuKey.value = ''
     editMode.value = true
     return
   }
-
   const saved = await saveAllEdits()
-  if (saved) {
-    openMenuKey.value = ''
-    editMode.value = false
+  if (saved) editMode.value = false
+}
+
+function toggleCreateMode() {
+  if (!canEditPlayers.value || creating.value) return
+  createMode.value = !createMode.value
+  if (createMode.value) {
+    resetMessages()
+    resetNewPlayer()
+  }
+}
+
+async function onCreatePlayer() {
+  resetMessages()
+  const name = String(newPlayer.name ?? '').trim()
+  const number = toNullableNumber(newPlayer.number)
+  if (!name) {
+    errorMessage.value = '선수 이름을 입력해주세요.'
+    return
+  }
+  if (number == null) {
+    errorMessage.value = '등번호를 입력해주세요.'
+    return
+  }
+
+  creating.value = true
+  try {
+    await createPlayer({
+      name,
+      number,
+      studentNo: sanitizeStudentNo(newPlayer.studentNo),
+      offensePositions: newPlayer.offense ? [newPlayer.offense] : [],
+      defensePositions: newPlayer.defense ? [newPlayer.defense] : [],
+      specialPositions: toSpecialList(newPlayer),
+      status: newPlayer.status,
+      heightCm: toNullableNumber(newPlayer.heightCm),
+      weightKg: toNullableNumber(newPlayer.weightKg),
+      age: null,
+      department: '',
+      remark: String(newPlayer.remark ?? ''),
+    })
+
+    setActionMessage(`${name} 선수를 추가했습니다.`)
+    createMode.value = false
+    resetNewPlayer()
+    await loadPlayers()
+  } catch (error) {
+    errorMessage.value = error?.message ?? '선수 추가에 실패했습니다.'
+  } finally {
+    creating.value = false
+  }
+}
+
+async function onDeletePlayer(player) {
+  if (!canEditPlayers.value || !editMode.value) return
+  const playerName = player?.name || '해당 선수'
+  const ok = window.confirm(`${playerName} 선수를 삭제하시겠습니까?`)
+  if (!ok) return
+
+  deletingId.value = player.id
+  resetMessages()
+  try {
+    await softDeletePlayer(player.id)
+    setActionMessage(`${playerName} 선수를 삭제했습니다.`)
+    await loadPlayers()
+  } catch (error) {
+    errorMessage.value = error?.message ?? '선수 삭제에 실패했습니다.'
+  } finally {
+    deletingId.value = ''
   }
 }
 
 async function loadPlayers() {
   loading.value = true
   errorMessage.value = ''
-
   try {
     players.value = await fetchPlayers()
     ensureEditRows()
@@ -301,6 +371,11 @@ async function loadPlayers() {
   } finally {
     loading.value = false
   }
+}
+
+async function onRefresh() {
+  resetSorts()
+  await loadPlayers()
 }
 
 async function loadMyRole() {
@@ -318,6 +393,13 @@ onMounted(async () => {
   await loadMyRole()
   await loadPlayers()
 })
+
+onBeforeUnmount(() => {
+  if (actionMessageTimer) {
+    clearTimeout(actionMessageTimer)
+    actionMessageTimer = null
+  }
+})
 </script>
 
 <template>
@@ -325,27 +407,62 @@ onMounted(async () => {
     <header class="panel header-panel">
       <p class="eyebrow">Player Management</p>
       <h1><Users :size="22" :stroke-width="1.9" />선수 관리</h1>
-      <p class="sub">선수 조회, 포지션/상태/신체 정보 편집을 처리합니다.</p>
+      <p class="sub">선수 조회, 등록, 상태/포지션/신체 정보 편집을 처리합니다.</p>
       <p class="meta">내 권한: {{ myRole }}</p>
     </header>
 
     <section class="panel">
       <div class="toolbar">
-        <input v-model="keyword" type="text" placeholder="이름, 번호, 포지션 검색">
+        <input v-model="keyword" type="text" placeholder="이름, 등번호, 학번, 포지션 검색">
 
-        <button
-          v-if="canEditPlayers"
-          type="button"
-          class="primary"
-          :disabled="loading || saving"
-          @click="toggleEditMode"
-        >
+        <button v-if="canEditPlayers" type="button" class="primary" :disabled="loading || saving" @click="toggleEditMode">
           {{ saving ? '저장 중...' : editMode ? '편집 종료' : '편집' }}
         </button>
+        <button v-if="canEditPlayers" type="button" :disabled="loading || saving || creating" @click="toggleCreateMode">
+          {{ createMode ? '추가 취소' : '선수 추가' }}
+        </button>
 
-        <button type="button" :disabled="loading || saving" @click="loadPlayers">
+        <button type="button" :disabled="loading || saving" @click="onRefresh">
           <RefreshCw :size="14" :stroke-width="1.9" />새로고침
         </button>
+      </div>
+
+      <div v-if="createMode && canEditPlayers" class="create-panel">
+        <h3>선수 추가</h3>
+        <div class="create-grid">
+          <input v-model="newPlayer.number" type="number" placeholder="등번호">
+          <input v-model="newPlayer.name" type="text" placeholder="이름">
+          <input v-model="newPlayer.studentNo" type="text" inputmode="numeric" maxlength="2" placeholder="학번(2자리)" @input="newPlayer.studentNo = sanitizeStudentNo(newPlayer.studentNo)">
+
+          <select v-model="newPlayer.offense">
+            <option value="">오펜스 선택 안함</option>
+            <option v-for="opt in OFFENSE_OPTIONS" :key="`new-off-${opt}`" :value="opt">{{ opt }}</option>
+          </select>
+
+          <select v-model="newPlayer.defense">
+            <option value="">디펜스 선택 안함</option>
+            <option v-for="opt in DEFENSE_OPTIONS" :key="`new-def-${opt}`" :value="opt">{{ opt }}</option>
+          </select>
+
+          <select v-model="newPlayer.status">
+            <option v-for="opt in STATUS_OPTIONS" :key="`new-status-${opt}`" :value="opt">{{ opt }}</option>
+          </select>
+
+          <input v-model="newPlayer.heightCm" type="number" placeholder="키(cm)">
+          <input v-model="newPlayer.weightKg" type="number" placeholder="몸무게(kg)">
+
+          <div class="special-checks">
+            <label><input v-model="newPlayer.specialK" type="checkbox"> 스페셜 K</label>
+            <label><input v-model="newPlayer.specialS" type="checkbox"> 스페셜 S</label>
+          </div>
+
+          <input v-model="newPlayer.remark" class="remark-input" type="text" placeholder="비고">
+        </div>
+        <div class="create-actions">
+          <button type="button" class="primary" :disabled="creating" @click="onCreatePlayer">
+            {{ creating ? '추가 중...' : '추가 저장' }}
+          </button>
+        </div>
       </div>
 
       <p v-if="!canEditPlayers" class="notice">ADMIN, COACH만 선수 편집이 가능합니다.</p>
@@ -356,177 +473,49 @@ onMounted(async () => {
         <table>
           <thead>
             <tr>
-              <th>
-                <div class="th-cell">
-                  <span>등번호</span>
-                  <select v-model="sortBy.number" class="sort-select">
-                    <option value="none">정렬</option>
-                    <option value="asc">오름차순</option>
-                    <option value="desc">내림차순</option>
-                  </select>
-                </div>
-              </th>
-              <th>
-                <div class="th-cell">
-                  <span>이름</span>
-                  <select v-model="sortBy.name" class="sort-select">
-                    <option value="none">정렬</option>
-                    <option value="ko_asc">가나다순</option>
-                    <option value="ko_desc">가나다 역순</option>
-                  </select>
-                </div>
-              </th>
-              <th>
-                <div class="th-cell">
-                  <span>오펜스</span>
-                  <select v-model="sortBy.offense" class="sort-select">
-                    <option value="none">정렬</option>
-                    <option value="group">포지션별</option>
-                  </select>
-                </div>
-              </th>
-              <th>
-                <div class="th-cell">
-                  <span>디펜스</span>
-                  <select v-model="sortBy.defense" class="sort-select">
-                    <option value="none">정렬</option>
-                    <option value="group">포지션별</option>
-                  </select>
-                </div>
-              </th>
-              <th>
-                <div class="th-cell">
-                  <span>스페셜</span>
-                  <select v-model="sortBy.special" class="sort-select">
-                    <option value="none">정렬</option>
-                    <option value="asc">오름차순</option>
-                    <option value="desc">내림차순</option>
-                  </select>
-                </div>
-              </th>
-              <th>
-                <div class="th-cell">
-                  <span>상태</span>
-                  <select v-model="sortBy.status" class="sort-select">
-                    <option value="none">정렬</option>
-                    <option value="group">상태별</option>
-                  </select>
-                </div>
-              </th>
-              <th>
-                <div class="th-cell">
-                  <span>키(cm)</span>
-                  <select v-model="sortBy.heightCm" class="sort-select">
-                    <option value="none">정렬</option>
-                    <option value="asc">오름차순</option>
-                    <option value="desc">내림차순</option>
-                  </select>
-                </div>
-              </th>
-              <th>
-                <div class="th-cell">
-                  <span>몸무게(kg)</span>
-                  <select v-model="sortBy.weightKg" class="sort-select">
-                    <option value="none">정렬</option>
-                    <option value="asc">오름차순</option>
-                    <option value="desc">내림차순</option>
-                  </select>
-                </div>
-              </th>
+              <th><div class="th-cell"><span>등번호</span><select :value="sortBy.number" class="sort-select" :disabled="isSortDisabled('number')" @change="onSortChange('number', $event.target.value)"><option value="none">정렬</option><option value="asc">오름차순</option><option value="desc">내림차순</option></select></div></th>
+              <th><div class="th-cell"><span>이름</span><select :value="sortBy.name" class="sort-select" :disabled="isSortDisabled('name')" @change="onSortChange('name', $event.target.value)"><option value="none">정렬</option><option value="ko_asc">가나다순</option><option value="ko_desc">가나다 역순</option></select></div></th>
+              <th><div class="th-cell"><span>학번</span><select :value="sortBy.studentNo" class="sort-select" :disabled="isSortDisabled('studentNo')" @change="onSortChange('studentNo', $event.target.value)"><option value="none">정렬</option><option value="asc">오름차순</option><option value="desc">내림차순</option></select></div></th>
+              <th><div class="th-cell"><span>오펜스</span><select :value="sortBy.offense" class="sort-select" :disabled="isSortDisabled('offense')" @change="onSortChange('offense', $event.target.value)"><option value="none">정렬</option><option value="group">포지션별</option></select></div></th>
+              <th><div class="th-cell"><span>디펜스</span><select :value="sortBy.defense" class="sort-select" :disabled="isSortDisabled('defense')" @change="onSortChange('defense', $event.target.value)"><option value="none">정렬</option><option value="group">포지션별</option></select></div></th>
+              <th><div class="th-cell"><span>스페셜</span><select :value="sortBy.special" class="sort-select" :disabled="isSortDisabled('special')" @change="onSortChange('special', $event.target.value)"><option value="none">정렬</option><option value="asc">오름차순</option><option value="desc">내림차순</option></select></div></th>
+              <th><div class="th-cell"><span>상태</span><select :value="sortBy.status" class="sort-select" :disabled="isSortDisabled('status')" @change="onSortChange('status', $event.target.value)"><option value="none">정렬</option><option value="group">상태별</option></select></div></th>
+              <th><div class="th-cell"><span>키(cm)</span><select :value="sortBy.heightCm" class="sort-select" :disabled="isSortDisabled('heightCm')" @change="onSortChange('heightCm', $event.target.value)"><option value="none">정렬</option><option value="asc">오름차순</option><option value="desc">내림차순</option></select></div></th>
+              <th><div class="th-cell"><span>몸무게(kg)</span><select :value="sortBy.weightKg" class="sort-select" :disabled="isSortDisabled('weightKg')" @change="onSortChange('weightKg', $event.target.value)"><option value="none">정렬</option><option value="asc">오름차순</option><option value="desc">내림차순</option></select></div></th>
+              <th>비고</th>
+              <th>작업</th>
             </tr>
           </thead>
+
           <tbody>
             <tr v-for="player in filteredPlayers" :key="player.id">
-              <td>
-                <input v-if="editMode && canEditPlayers" v-model="editRows[player.id].number" type="number" class="num-input">
-                <span v-else>{{ player.number }}</span>
-              </td>
-
+              <td><input v-if="editMode && canEditPlayers" v-model="editRows[player.id].number" type="number" class="num-input"><span v-else>{{ player.number }}</span></td>
               <td>
                 <input v-if="editMode && canEditPlayers" v-model="editRows[player.id].name" type="text" class="cell-input">
                 <span v-else>{{ player.name }}</span>
               </td>
+              <td><input v-if="editMode && canEditPlayers" v-model="editRows[player.id].studentNo" type="text" inputmode="numeric" maxlength="2" class="num-input" @input="editRows[player.id].studentNo = sanitizeStudentNo(editRows[player.id].studentNo)"><span v-else>{{ player.studentNo || '-' }}</span></td>
 
               <td>
-                <div v-if="editMode && canEditPlayers" class="position-picker">
-                  <button type="button" class="picker-trigger" @click="togglePositionMenu(player.id, 'offensePositions')">
-                    <span v-if="editRows[player.id].offensePositions.length === 0" class="placeholder">옵션 선택</span>
-                    <span
-                      v-for="opt in editRows[player.id].offensePositions"
-                      :key="`off-tag-${player.id}-${opt}`"
-                      class="chip active"
-                    >
-                      {{ opt }}
-                    </span>
-                  </button>
-                  <div v-if="isPositionMenuOpen(player.id, 'offensePositions')" class="picker-menu">
-                    <button
-                      v-for="opt in OFFENSE_OPTIONS"
-                      :key="`off-${player.id}-${opt}`"
-                      type="button"
-                      class="picker-option"
-                      :class="{ selected: editRows[player.id].offensePositions.includes(opt) }"
-                      @click.stop="togglePosition(player.id, 'offensePositions', opt)"
-                    >
-                      {{ opt }}
-                    </button>
-                  </div>
-                </div>
+                <select v-if="editMode && canEditPlayers" v-model="editRows[player.id].offense" class="status-select">
+                  <option value="">선택 안함</option>
+                  <option v-for="opt in OFFENSE_OPTIONS" :key="`off-${player.id}-${opt}`" :value="opt">{{ opt }}</option>
+                </select>
                 <span v-else>{{ (player.offensePositions || []).join(', ') || '-' }}</span>
               </td>
 
               <td>
-                <div v-if="editMode && canEditPlayers" class="position-picker">
-                  <button type="button" class="picker-trigger" @click="togglePositionMenu(player.id, 'defensePositions')">
-                    <span v-if="editRows[player.id].defensePositions.length === 0" class="placeholder">옵션 선택</span>
-                    <span
-                      v-for="opt in editRows[player.id].defensePositions"
-                      :key="`def-tag-${player.id}-${opt}`"
-                      class="chip active"
-                    >
-                      {{ opt }}
-                    </span>
-                  </button>
-                  <div v-if="isPositionMenuOpen(player.id, 'defensePositions')" class="picker-menu">
-                    <button
-                      v-for="opt in DEFENSE_OPTIONS"
-                      :key="`def-${player.id}-${opt}`"
-                      type="button"
-                      class="picker-option"
-                      :class="{ selected: editRows[player.id].defensePositions.includes(opt) }"
-                      @click.stop="togglePosition(player.id, 'defensePositions', opt)"
-                    >
-                      {{ opt }}
-                    </button>
-                  </div>
-                </div>
+                <select v-if="editMode && canEditPlayers" v-model="editRows[player.id].defense" class="status-select">
+                  <option value="">선택 안함</option>
+                  <option v-for="opt in DEFENSE_OPTIONS" :key="`def-${player.id}-${opt}`" :value="opt">{{ opt }}</option>
+                </select>
                 <span v-else>{{ (player.defensePositions || []).join(', ') || '-' }}</span>
               </td>
 
               <td>
-                <div v-if="editMode && canEditPlayers" class="position-picker">
-                  <button type="button" class="picker-trigger" @click="togglePositionMenu(player.id, 'specialPositions')">
-                    <span v-if="editRows[player.id].specialPositions.length === 0" class="placeholder">옵션 선택</span>
-                    <span
-                      v-for="opt in editRows[player.id].specialPositions"
-                      :key="`sp-tag-${player.id}-${opt}`"
-                      class="chip active"
-                    >
-                      {{ opt }}
-                    </span>
-                  </button>
-                  <div v-if="isPositionMenuOpen(player.id, 'specialPositions')" class="picker-menu">
-                    <button
-                      v-for="opt in SPECIAL_OPTIONS"
-                      :key="`sp-${player.id}-${opt}`"
-                      type="button"
-                      class="picker-option"
-                      :class="{ selected: editRows[player.id].specialPositions.includes(opt) }"
-                      @click.stop="togglePosition(player.id, 'specialPositions', opt)"
-                    >
-                      {{ opt }}
-                    </button>
-                  </div>
+                <div v-if="editMode && canEditPlayers" class="special-checks in-table">
+                  <label><input v-model="editRows[player.id].specialK" type="checkbox"> K</label>
+                  <label><input v-model="editRows[player.id].specialS" type="checkbox"> S</label>
                 </div>
                 <span v-else>{{ (player.specialPositions || []).join(', ') || '-' }}</span>
               </td>
@@ -535,24 +524,31 @@ onMounted(async () => {
                 <select v-if="editMode && canEditPlayers" v-model="editRows[player.id].status" class="status-select">
                   <option v-for="opt in STATUS_OPTIONS" :key="`status-${player.id}-${opt}`" :value="opt">{{ opt }}</option>
                 </select>
-                <span v-else class="status-chip" :class="`status-${(player.status || '재학')}`">
-                  {{ player.status || '재학' }}
-                </span>
+                <span v-else>{{ player.status || '재학' }}</span>
               </td>
 
+              <td><input v-if="editMode && canEditPlayers" v-model="editRows[player.id].heightCm" type="number" class="num-input"><span v-else>{{ player.heightCm ?? '-' }}</span></td>
+              <td><input v-if="editMode && canEditPlayers" v-model="editRows[player.id].weightKg" type="number" class="num-input"><span v-else>{{ player.weightKg ?? '-' }}</span></td>
               <td>
-                <input v-if="editMode && canEditPlayers" v-model="editRows[player.id].heightCm" type="number" class="num-input">
-                <span v-else>{{ player.heightCm ?? '-' }}</span>
+                <textarea v-if="editMode && canEditPlayers" v-model="editRows[player.id].remark" class="remark-cell-input" rows="2" />
+                <span v-else>{{ player.remark || '-' }}</span>
               </td>
-
-              <td>
-                <input v-if="editMode && canEditPlayers" v-model="editRows[player.id].weightKg" type="number" class="num-input">
-                <span v-else>{{ player.weightKg ?? '-' }}</span>
+              <td class="action-col">
+                <button
+                  v-if="editMode && canEditPlayers"
+                  type="button"
+                  class="trash-btn"
+                  :disabled="deletingId === player.id || saving || creating"
+                  @click="onDeletePlayer(player)"
+                >
+                  <Trash2 :size="14" :stroke-width="1.9" />
+                </button>
+                <span v-else>-</span>
               </td>
             </tr>
 
             <tr v-if="!loading && filteredPlayers.length === 0">
-              <td colspan="8">데이터가 없습니다.</td>
+              <td colspan="11">데이터가 없습니다.</td>
             </tr>
           </tbody>
         </table>
@@ -563,7 +559,7 @@ onMounted(async () => {
 
 <style scoped>
 .page {
-  max-width: 1180px;
+  max-width: 1260px;
   margin: 0 auto;
   padding: 24px 16px 32px;
   display: grid;
@@ -578,72 +574,44 @@ onMounted(async () => {
   box-shadow: var(--kw-shadow-card);
 }
 
-.eyebrow {
-  margin: 0;
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  color: var(--kw-text-soft);
-  text-transform: uppercase;
-}
+.eyebrow { margin: 0; font-size: 12px; letter-spacing: 0.08em; color: var(--kw-text-soft); text-transform: uppercase; }
+.header-panel h1 { margin: 6px 0 8px; font-size: 28px; display: flex; align-items: center; gap: 8px; }
+.sub { margin: 0; color: var(--kw-text-muted); }
+.meta { margin: 8px 0 0; color: var(--kw-text-soft); font-size: 13px; }
 
-.header-panel h1 {
-  margin: 6px 0 8px;
-  font-size: 28px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
+.toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
+.toolbar input { flex: 1; height: 40px; border: 1px solid var(--kw-line-strong); border-radius: var(--kw-radius-sm); padding: 0 12px; }
+.toolbar button { display: inline-flex; align-items: center; gap: 6px; height: 40px; border: 1px solid var(--kw-line-strong); border-radius: var(--kw-radius-sm); padding: 0 12px; background: var(--kw-surface); }
+.toolbar .primary { background: var(--kw-primary); border-color: var(--kw-primary); color: var(--kw-primary-contrast); }
 
-.sub {
-  margin: 0;
-  color: var(--kw-text-muted);
-}
+.create-panel { margin: 0 0 12px; border: 1px solid var(--kw-line); border-radius: var(--kw-radius-md); background: var(--kw-surface-muted); padding: 12px; }
+.create-panel h3 { margin: 0 0 10px; font-size: 15px; }
+.create-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.create-grid input, .create-grid select { height: 36px; border: 1px solid var(--kw-line-strong); border-radius: 8px; background: #fff; padding: 0 10px; }
+.create-grid textarea { border: 1px solid var(--kw-line-strong); border-radius: 8px; background: #fff; padding: 8px 10px; box-sizing: border-box; resize: vertical; }
+.remark-input { grid-column: span 2; }
 
-.meta {
-  margin: 8px 0 0;
-  color: var(--kw-text-soft);
-  font-size: 13px;
-}
+.special-checks { display: flex; align-items: center; gap: 14px; font-size: 13px; color: var(--kw-text-muted); }
+.special-checks.in-table { min-width: 100px; }
 
-.toolbar {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
-}
+.create-actions { margin-top: 10px; }
+.create-actions button { height: 36px; border: 1px solid var(--kw-line-strong); border-radius: 8px; padding: 0 12px; background: var(--kw-surface); }
+.create-actions .primary { background: var(--kw-primary); border-color: var(--kw-primary); color: var(--kw-primary-contrast); }
 
-.toolbar input {
-  flex: 1;
-  height: 40px;
-  border: 1px solid var(--kw-line-strong);
-  border-radius: var(--kw-radius-sm);
-  padding: 0 12px;
-}
+.notice { margin: 0 0 10px; color: #92400e; background: #fffbeb; border: 1px solid #fcd34d; border-radius: 10px; padding: 8px 10px; font-size: 13px; }
+.error { margin: 0 0 10px; color: var(--kw-danger-text); font-size: 13px; }
+.success { margin: 0 0 10px; color: var(--kw-success-text); font-size: 13px; }
 
-.toolbar button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 40px;
-  border: 1px solid var(--kw-line-strong);
-  border-radius: var(--kw-radius-sm);
-  padding: 0 12px;
-  background: var(--kw-surface);
-}
+.table-wrap { border: 1px solid var(--kw-line); border-radius: var(--kw-radius-md); overflow: auto; }
+table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+th, td { padding: 11px 12px; border-bottom: 1px solid #eceff3; text-align: center; font-size: 14px; vertical-align: middle; }
+th { background: var(--kw-surface-muted); color: var(--kw-text-muted); font-weight: 600; }
 
-.toolbar .primary {
-  background: var(--kw-primary);
-  border-color: var(--kw-primary);
-  color: var(--kw-primary-contrast);
-}
-
-.th-cell {
-  display: grid;
-  gap: 4px;
-  min-width: 120px;
-}
-
+.th-cell { display: grid; gap: 6px; min-width: 110px; }
 .sort-select {
+  width: 11ch;
   height: 28px;
+  margin: 0 auto;
   border: 1px solid var(--kw-line-strong);
   border-radius: 8px;
   background: #fff;
@@ -652,180 +620,127 @@ onMounted(async () => {
   padding: 0 8px;
 }
 
-.notice {
-  margin: 0 0 10px;
-  color: #92400e;
-  background: #fffbeb;
-  border: 1px solid #fcd34d;
-  border-radius: 10px;
-  padding: 8px 10px;
-  font-size: 13px;
+th:first-child, td:first-child { width: 72px; min-width: 72px; max-width: 72px; }
+th:first-child .th-cell { min-width: 0; }
+
+/* 이름 컬럼 폭 축소 */
+th:nth-child(2),
+td:nth-child(2) {
+  width: 12ch;
+  min-width: 12ch;
+  max-width: 14ch;
 }
 
-.error {
-  margin: 0 0 10px;
-  color: var(--kw-danger-text);
-  font-size: 13px;
+/* 학번 컬럼 폭 축소 */
+th:nth-child(3),
+td:nth-child(3) {
+  width: 6ch;
+  min-width: 6ch;
+  max-width: 8ch;
 }
 
-.success {
-  margin: 0 0 10px;
-  color: var(--kw-success-text);
-  font-size: 13px;
+/* 비고 컬럼 줄바꿈 */
+th:nth-child(10),
+td:nth-child(10) {
+  width: 24ch;
+  min-width: 20ch;
+  max-width: 28ch;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  overflow: hidden;
 }
 
-.table-wrap {
-  border: 1px solid var(--kw-line);
-  border-radius: var(--kw-radius-md);
+th:nth-child(8),
+td:nth-child(8) {
+  width: 8ch;
+  min-width: 8ch;
+  max-width: 10ch;
+}
+
+th:nth-child(9),
+td:nth-child(9) {
+  width: 8ch;
+  min-width: 8ch;
+  max-width: 10ch;
+}
+
+.cell-input, .num-input, .status-select {
+  width: 100%;
+  min-width: 84px;
+  max-width: 100%;
+  height: 32px;
+  border: 1px solid var(--kw-line-strong);
+  border-radius: 8px;
+  padding: 0 8px;
+  background: #fff;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.remark-cell-input {
+  width: 100%;
+  max-width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--kw-line-strong);
+  border-radius: 8px;
+  padding: 8px;
+  background: #fff;
+  resize: none;
+  box-sizing: border-box;
+  text-align: left;
   overflow: auto;
 }
 
-table {
-  width: 100%;
-  border-collapse: collapse;
+/* 이름(2열), 비고(10열)을 제외한 나머지 열 폭 축소 */
+th:not(:nth-child(2)):not(:nth-child(10)):not(:nth-child(11)) .th-cell {
+  min-width: 6ch;
 }
 
-th,
-td {
-  padding: 11px 12px;
-  border-bottom: 1px solid #eceff3;
-  text-align: left;
-  font-size: 14px;
-  vertical-align: top;
+
+tbody td:not(:nth-child(2)):not(:nth-child(10)):not(:nth-child(11)) {
+  width: 3ch;
+  white-space: nowrap;
 }
 
-th {
-  background: var(--kw-surface-muted);
-  color: var(--kw-text-muted);
-  font-weight: 600;
+tbody td:not(:nth-child(2)):not(:nth-child(10)):not(:nth-child(11)) .cell-input,
+tbody td:not(:nth-child(2)):not(:nth-child(10)):not(:nth-child(11)) .num-input,
+tbody td:not(:nth-child(2)):not(:nth-child(10)):not(:nth-child(11)) .status-select {
+  min-width: 3ch;
 }
 
-.cell-input,
-.num-input {
-  width: 100%;
-  min-width: 80px;
-  height: 32px;
-  border: 1px solid var(--kw-line-strong);
+.delete-btn {
+  height: 30px;
+  border: 1px solid #dc2626;
   border-radius: 8px;
-  padding: 0 8px;
-}
-
-.toggle-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  min-width: 120px;
-}
-
-.chip {
-  height: 28px;
-  border: 1px solid var(--kw-line-strong);
-  border-radius: 6px;
-  background: #fff;
-  color: var(--kw-text);
-  padding: 0 8px;
-  font-size: 12px;
-}
-
-.chip.active {
-  border-color: var(--kw-line-strong);
-  background: #fff;
-  color: var(--kw-text);
-}
-
-.position-picker {
-  position: relative;
-  min-width: 150px;
-}
-
-.picker-trigger {
-  width: 100%;
-  min-height: 36px;
-  border: 1px solid var(--kw-line-strong);
-  border-radius: 8px;
-  background: #fff;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  padding: 4px 8px;
-}
-
-.placeholder {
-  color: #94a3b8;
-  font-size: 12px;
-}
-
-.picker-menu {
-  position: absolute;
-  z-index: 5;
-  top: calc(100% + 6px);
-  left: 0;
-  width: 220px;
-  border: 1px solid var(--kw-line);
-  border-radius: 12px;
-  background: #fff;
-  box-shadow: var(--kw-shadow-card);
-  padding: 8px;
-  display: grid;
-  gap: 6px;
-}
-
-.picker-option {
-  height: 32px;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  background: #fff;
-  text-align: left;
-  padding: 0 10px;
-  font-size: 13px;
-}
-
-.picker-option.selected {
-  border-color: var(--kw-line-strong);
-}
-
-.status-select {
-  width: 100%;
-  min-width: 96px;
-  height: 32px;
-  border: 1px solid var(--kw-line-strong);
-  border-radius: 6px;
-  background: #fff;
-  padding: 0 8px;
-}
-
-.status-chip {
-  display: inline-block;
-  border-radius: 999px;
-  padding: 2px 8px;
-  font-size: 12px;
-  border: 1px solid #cbd5e1;
-  background: #f8fafc;
-  color: #334155;
-}
-
-.status-재학 {
-  border-color: var(--kw-success-line);
-  background: var(--kw-success-bg);
-  color: var(--kw-success-text);
-}
-
-.status-휴학 {
-  border-color: #f59e0b;
-  background: #fff7ed;
-  color: #b45309;
-}
-
-.status-부상 {
-  border-color: var(--kw-danger-line);
-  background: var(--kw-danger-bg);
+  background: #fee2e2;
   color: #991b1b;
+  padding: 0 10px;
+}
+
+.inline-delete-btn {
+  margin-top: 6px;
+}
+
+.action-col {
+  width: 52px;
+}
+
+.trash-btn {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fff5f5;
+  color: #dc2626;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 @media (max-width: 960px) {
-  .toolbar {
-    flex-direction: column;
-  }
+  .toolbar { flex-direction: column; }
+  .create-grid { grid-template-columns: 1fr 1fr; }
+  .remark-input { grid-column: span 2; }
 }
 </style>

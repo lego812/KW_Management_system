@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { LayoutDashboard, LogOut, NotebookPen, UserRound, Users } from 'lucide-vue-next'
+import { LayoutDashboard, LogOut, NotebookPen, UserRound, Users } from 'lucide-vue-next' //아이콘 라이브러리
 import { getMemberStatusDetail, signOutUser } from './api/auth'
 import { useAuthStore } from './stores/auth'
 
