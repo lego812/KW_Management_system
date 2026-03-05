@@ -22,8 +22,8 @@ const routes = [
     component: MainView,
     meta: {
       requiresAuth: true,
-      section: 'MAIN DASHBOARD',
-      description: '팀 운영 지표를 요약해 확인합니다.',
+      section: 'TEAM STATUS',
+      description: '팀 현황 지표를 요약해 확인합니다.',
     },
   },
   {

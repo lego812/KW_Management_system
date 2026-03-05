@@ -10,6 +10,8 @@ import {
   signOutUser,
   signUpByEmail,
 } from '../api/auth'
+import BaseModal from '../components/common/BaseModal.vue'
+import InlineMessage from '../components/common/InlineMessage.vue'
 import { useAuthStore } from '../stores/auth'
 
 const form = reactive({
@@ -236,17 +238,17 @@ watch(
         </div>
       </form>
 
-      <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
-      <p v-if="successMessage" class="success">{{ successMessage }}</p>
+      <InlineMessage :message="errorMessage" type="error" center />
+      <InlineMessage :message="successMessage" type="success" center />
     </section>
 
-    <div v-if="showPendingModal" class="modal-backdrop" @click.self="closePendingModal">
-      <article class="modal-panel">
+    <BaseModal :show="showPendingModal" max-width="420px" @close="closePendingModal">
+      <article class="pending-modal">
         <button type="button" class="modal-close" aria-label="닫기" @click="closePendingModal">×</button>
         <h2>관리자 승인 대기</h2>
         <p>아직 관리자 승인 대기 중입니다. 승인 완료 후 다시 로그인해주세요.</p>
       </article>
-    </div>
+    </BaseModal>
   </main>
 </template>
 
@@ -376,45 +378,17 @@ watch(
   opacity: 0.6;
 }
 
-.error {
-  margin: 10px 0 0;
-  color: var(--kw-danger-text);
-  font-size: 13px;
-  text-align: center;
-}
-
-.success {
-  margin: 10px 0 0;
-  color: var(--kw-success-text);
-  font-size: 13px;
-  text-align: center;
-}
-
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(15, 23, 42, 0.45);
-  display: grid;
-  place-items: center;
-  padding: 16px;
-}
-
-.modal-panel {
-  width: min(420px, 100%);
-  background: var(--kw-surface);
-  border: 1px solid var(--kw-line);
-  border-radius: var(--kw-radius-md);
-  padding: 20px 18px 16px;
+.pending-modal {
   position: relative;
-  box-shadow: var(--kw-shadow-card);
+  padding: 4px 2px;
 }
 
-.modal-panel h2 {
+.pending-modal h2 {
   margin: 0 0 10px;
   font-size: 22px;
 }
 
-.modal-panel p {
+.pending-modal p {
   margin: 0;
   color: var(--kw-text-muted);
   line-height: 1.45;

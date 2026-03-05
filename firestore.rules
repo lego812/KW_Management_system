@@ -133,8 +133,8 @@ service cloud.firestore {
           allow delete: if false;
         }
 
-        // state/versions/*
-        match /state/versions/{versionId} {
+        // state/{stateId}/versions/*
+        match /state/{stateId}/versions/{versionId} {
           allow read: if isApproved(orgId);
           allow create, update: if isApproved(orgId);
           allow delete: if false;

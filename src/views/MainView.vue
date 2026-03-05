@@ -2,6 +2,9 @@
 import { computed, onMounted, ref } from 'vue'
 import { PieChart, Users } from 'lucide-vue-next'
 import { fetchPlayers } from '../api/players'
+import InlineMessage from '../components/common/InlineMessage.vue'
+import PageHeaderPanel from '../components/common/PageHeaderPanel.vue'
+import StatSummaryCard from '../components/common/StatSummaryCard.vue'
 
 const OFFENSE_ORDER = ['QB', 'RB', 'OL', 'TE', 'WR']
 const DEFENSE_ORDER = ['DL', 'LB', 'C', 'S']
@@ -67,7 +70,7 @@ async function loadDashboardStats() {
   try {
     players.value = await fetchPlayers()
   } catch (error) {
-    errorMessage.value = error?.message ?? '대시보드 통계를 불러오지 못했습니다.'
+    errorMessage.value = error?.message ?? '팀 현황 통계를 불러오지 못했습니다.'
   } finally {
     loading.value = false
   }
@@ -78,18 +81,20 @@ onMounted(loadDashboardStats)
 
 <template>
   <main class="page">
-    <header class="header-block panel">
-      <p class="eyebrow">Player Dashboard</p>
-      <h1><Users :size="20" :stroke-width="1.9" />선수 통계 대시보드</h1>
-      <p class="sub">선수 데이터 기반 집계 통계를 확인합니다.</p>
-    </header>
+    <PageHeaderPanel
+      eyebrow="Team Status"
+      title="팀 현황"
+      subtitle="선수 데이터 기반 팀 현황 집계를 확인합니다."
+      :icon="Users"
+      :icon-size="20"
+    />
 
-    <p v-if="errorMessage" class="error panel">{{ errorMessage }}</p>
+    <InlineMessage :message="errorMessage" type="error" panel />
 
     <section class="summary-grid">
-      <article class="panel stat-card"><h2>총 선수 수</h2><strong>{{ loading ? '...' : `${totalPlayers}명` }}</strong></article>
-      <article class="panel stat-card"><h2>오펜스 지정 선수</h2><strong>{{ loading ? '...' : `${offenseAssigned}명` }}</strong></article>
-      <article class="panel stat-card"><h2>디펜스 지정 선수</h2><strong>{{ loading ? '...' : `${defenseAssigned}명` }}</strong></article>
+      <StatSummaryCard label="총 선수 수" :value="loading ? '...' : `${totalPlayers}명`" />
+      <StatSummaryCard label="오펜스 지정 선수" :value="loading ? '...' : `${offenseAssigned}명`" />
+      <StatSummaryCard label="디펜스 지정 선수" :value="loading ? '...' : `${defenseAssigned}명`" />
     </section>
 
     <section class="analytics-grid">
@@ -141,14 +146,8 @@ onMounted(loadDashboardStats)
 <style scoped>
 .page { max-width: 1180px; margin: 0 auto; padding: 24px 16px 32px; display: grid; gap: 12px; }
 .panel { background: var(--kw-surface); border: 1px solid var(--kw-line); border-radius: var(--kw-radius-lg); padding: 18px; box-shadow: var(--kw-shadow-card); }
-.eyebrow { margin: 0; font-size: 12px; letter-spacing: 0.08em; color: var(--kw-text-soft); text-transform: uppercase; }
-.header-block h1 { margin: 6px 0 8px; font-size: 28px; display: flex; align-items: center; gap: 8px; }
-.sub { margin: 0; color: var(--kw-text-muted); }
-.error { margin: 0; color: var(--kw-danger-text); font-size: 13px; }
 
 .summary-grid { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: 12px; }
-.stat-card h2 { margin: 0; font-size: 13px; color: var(--kw-text-soft); font-weight: 500; }
-.stat-card strong { display: block; margin-top: 8px; font-size: 30px; line-height: 1; }
 
 .analytics-grid { display: grid; grid-template-columns: repeat(3, minmax(260px, 1fr)); gap: 12px; }
 .block-card { display: grid; gap: 10px; }

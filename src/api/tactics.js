@@ -54,7 +54,7 @@ function boardCurrentDoc(boardId) {
 
 function boardVersionsCol(boardId) {
   requireFirestore()
-  return collection(db, `orgs/${orgId}/tacticBoards/${boardId}/state/versions`)
+  return collection(db, `orgs/${orgId}/tacticBoards/${boardId}/state/current/versions`)
 }
 
 function clamp01(value) {
@@ -370,7 +370,7 @@ export async function saveBoardVersion(boardId, message = '') {
 
 export async function applyBoardVersion(boardId, versionId) {
   requireFirestore()
-  const snap = await getDoc(doc(db, `orgs/${orgId}/tacticBoards/${boardId}/state/versions/${versionId}`))
+  const snap = await getDoc(doc(db, `orgs/${orgId}/tacticBoards/${boardId}/state/current/versions/${versionId}`))
   if (!snap.exists()) throw new Error('선택한 버전이 존재하지 않습니다.')
 
   const snapshot = sanitizeState(snap.data()?.snapshot)

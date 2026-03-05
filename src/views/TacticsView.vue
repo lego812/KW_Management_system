@@ -1,6 +1,7 @@
 ﻿<script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import {
+  ArrowLeft,
   Check,
   CircleDot,
   Eraser,
@@ -23,20 +24,26 @@ import {
   deleteTacticBoard,
   fetchBoardState,
   fetchBoardVersions,
+  fetchTactics,
   fetchPlaybooks,
   fetchTacticsByBook,
   saveBoardState,
   saveBoardVersion,
   updateTacticBoardMeta,
 } from '../api/tactics'
+import BaseModal from '../components/common/BaseModal.vue'
+import InlineMessage from '../components/common/InlineMessage.vue'
+import PageHeaderPanel from '../components/common/PageHeaderPanel.vue'
 
 const category = ref('ALL')
 const loading = ref(false)
 const saving = ref(false)
 const errorMessage = ref('')
 const actionMessage = ref('')
+let actionMessageTimer = null
 const tactics = ref([])
 const playbooks = ref([])
+const playbookStats = ref({})
 const playersPool = ref([])
 const versions = ref([])
 
@@ -105,6 +112,73 @@ const toolItems = [
   { id: 'other', label: 'Other' },
   { id: 'text', label: 'Text' },
 ]
+
+function setActionMessage(message, timeoutMs = 3000) {
+  actionMessage.value = message
+  if (actionMessageTimer) clearTimeout(actionMessageTimer)
+  actionMessageTimer = setTimeout(() => {
+    actionMessage.value = ''
+    actionMessageTimer = null
+  }, timeoutMs)
+}
+
+function emptyBookStats() {
+  return {
+    total: 0,
+    offense: 0,
+    defense: 0,
+    special: 0,
+  }
+}
+
+function buildPlaybookStats(rows) {
+  const stats = {}
+  for (const row of rows) {
+    const bookId = String(row?.bookId ?? '')
+    if (!bookId) continue
+    if (!stats[bookId]) stats[bookId] = emptyBookStats()
+    stats[bookId].total += 1
+
+    const category = String(row?.category ?? '').toUpperCase()
+    if (category === 'OFFENSE') stats[bookId].offense += 1
+    if (category === 'DEFENSE') stats[bookId].defense += 1
+    if (category === 'SPECIAL') stats[bookId].special += 1
+  }
+  return stats
+}
+
+function getBookStats(bookId) {
+  return playbookStats.value[String(bookId)] ?? emptyBookStats()
+}
+
+function ensureBookStats(bookId) {
+  const key = String(bookId ?? '')
+  if (!key) return null
+  if (!playbookStats.value[key]) {
+    playbookStats.value[key] = emptyBookStats()
+  }
+  return playbookStats.value[key]
+}
+
+function incrementBookStats(bookId, category) {
+  const stats = ensureBookStats(bookId)
+  if (!stats) return
+  stats.total += 1
+  const key = String(category ?? '').toUpperCase()
+  if (key === 'OFFENSE') stats.offense += 1
+  if (key === 'DEFENSE') stats.defense += 1
+  if (key === 'SPECIAL') stats.special += 1
+}
+
+function decrementBookStats(bookId, category) {
+  const stats = ensureBookStats(bookId)
+  if (!stats) return
+  stats.total = Math.max(0, stats.total - 1)
+  const key = String(category ?? '').toUpperCase()
+  if (key === 'OFFENSE') stats.offense = Math.max(0, stats.offense - 1)
+  if (key === 'DEFENSE') stats.defense = Math.max(0, stats.defense - 1)
+  if (key === 'SPECIAL') stats.special = Math.max(0, stats.special - 1)
+}
 
 function createEmptyState() {
   return {
@@ -206,7 +280,9 @@ async function loadPlaybooks() {
   loading.value = true
   errorMessage.value = ''
   try {
-    playbooks.value = await fetchPlaybooks()
+    const [bookRows, tacticRows] = await Promise.all([fetchPlaybooks(), fetchTactics('ALL')])
+    playbooks.value = bookRows
+    playbookStats.value = buildPlaybookStats(tacticRows)
   } catch (error) {
     errorMessage.value = error?.message ?? '전술집 목록을 불러오지 못했습니다.'
   } finally {
@@ -229,7 +305,7 @@ async function onCreatePlaybook() {
     createBookForm.title = ''
     createBookForm.description = ''
     showCreateBookModal.value = false
-    actionMessage.value = '전술집을 생성했습니다.'
+    setActionMessage('전술집을 생성했습니다.', 3000)
     selectedBookId.value = ref.id
     try {
       await loadPlaybooks()
@@ -345,8 +421,8 @@ async function onCreateBoard() {
       tags,
       initialState: createEmptyState(),
     })
+    incrementBookStats(selectedBookId.value, createForm.category)
 
-    actionMessage.value = '작전을 생성했습니다.'
     createForm.title = ''
     createForm.summary = ''
     createForm.roleDescription = ''
@@ -667,8 +743,11 @@ async function onRefresh() {
     await openBoard(selectedBoardId.value)
     return
   }
+  if (selectedBookId.value) {
+    await loadTactics()
+    return
+  }
   await loadPlaybooks()
-  await loadTactics()
 }
 
 async function onDeleteBoard(boardId) {
@@ -678,7 +757,11 @@ async function onDeleteBoard(boardId) {
   loading.value = true
   errorMessage.value = ''
   try {
+    const target = tactics.value.find((row) => row.id === boardId)
     await deleteTacticBoard(boardId)
+    if (target) {
+      decrementBookStats(target.bookId || selectedBookId.value, target.category)
+    }
     if (selectedBoardId.value === boardId) {
       selectedBoardId.value = ''
     }
@@ -697,150 +780,182 @@ function onSelectPlaybook(bookId) {
   loadTactics()
 }
 
+async function onBackToPlaybooks() {
+  selectedBookId.value = ''
+  selectedBoardId.value = ''
+  tactics.value = []
+  versions.value = []
+  await loadPlaybooks()
+}
+
 onMounted(async () => {
   await Promise.all([loadPlaybooks(), loadPlayers()])
+})
+
+onBeforeUnmount(() => {
+  if (actionMessageTimer) {
+    clearTimeout(actionMessageTimer)
+    actionMessageTimer = null
+  }
 })
 </script>
 
 <template>
   <main class="page">
-    <header class="panel header-panel">
-      <p class="eyebrow">Tactical Board</p>
-      <h1><NotebookPen :size="22" :stroke-width="1.9" />전술 보드</h1>
-      <p class="sub">보드 생성, 선수 배치, Route/Pass/Fake/Block 작성, 버전 저장과 복원을 처리합니다.</p>
-    </header>
+    <PageHeaderPanel
+      eyebrow="Tactical Board"
+      title="전술 보드"
+      subtitle="보드 생성, 선수 배치, Route/Pass/Fake/Block 작성, 버전 저장과 복원을 처리합니다."
+      :icon="NotebookPen"
+    />
 
-    <section class="layout">
-      <aside class="panel left-panel">
-        <div class="left-head">
-          <h2>전술집</h2>
-          <div class="left-controls">
-            <input v-model="playbookSearch" type="text" placeholder="전술집 검색" />
-            <select v-model="playbookSort">
-              <option value="desc">최신순</option>
-              <option value="asc">오래된순</option>
-            </select>
-          </div>
-        </div>
-        <div class="board-list">
-          <button
-            v-for="book in filteredPlaybooks"
-            :key="book.id"
-            type="button"
-            class="board-item"
-            :class="{ active: selectedBookId === book.id }"
-            @click="onSelectPlaybook(book.id)"
-          >
-            <strong>{{ book.title }}</strong>
-            <span v-if="book.description" class="book-desc">{{ book.description }}</span>
-            <span>생성 {{ formatDate(book.createdAt) }} | 수정 {{ formatDate(book.updatedAt) }}</span>
+    <section v-if="!selectedBookId" class="panel playbook-panel">
+      <div class="left-head">
+        <h2>전술집</h2>
+        <div class="left-controls">
+          <input v-model="playbookSearch" type="text" placeholder="전술집 검색" />
+          <select v-model="playbookSort">
+            <option value="desc">최신순</option>
+            <option value="asc">오래된순</option>
+          </select>
+          <button type="button" class="primary" :disabled="loading || saving" @click="openCreatePlaybookModal">전술집 생성</button>
+          <button type="button" :disabled="loading || saving" @click="onRefresh">
+            <RefreshCw :size="14" :stroke-width="1.9" />새로고침
           </button>
-          <p v-if="!loading && playbooks.length === 0" class="empty">등록된 전술집이 없습니다.</p>
-          <p v-else-if="!loading && filteredPlaybooks.length === 0" class="empty">검색 결과가 없습니다.</p>
         </div>
+      </div>
 
-        <p v-if="!selectedBookId" class="empty">전술집을 선택하면 우측에 전술 테이블이 표시됩니다.</p>
-      </aside>
+      <div class="board-list">
+        <button
+          v-for="book in filteredPlaybooks"
+          :key="book.id"
+          type="button"
+          class="board-item"
+          @click="onSelectPlaybook(book.id)"
+        >
+          <div class="board-item-head">
+            <strong>{{ book.title }}</strong>
+          </div>
+          <span v-if="book.description" class="book-desc">{{ book.description }}</span>
+          <span v-else class="book-desc muted">설명이 없습니다.</span>
+          <div class="book-meta">
+            <span>생성 {{ formatDate(book.createdAt) }}</span>
+            <span>수정 {{ formatDate(book.updatedAt) }}</span>
+          </div>
+          <div class="book-stats">
+            <span>총 작전수 {{ getBookStats(book.id).total }}</span>
+            <span>오펜스 {{ getBookStats(book.id).offense }}</span>
+            <span>디펜스 {{ getBookStats(book.id).defense }}</span>
+            <span>스페셜 {{ getBookStats(book.id).special }}</span>
+          </div>
+        </button>
+        <p v-if="!loading && playbooks.length === 0" class="empty">등록된 전술집이 없습니다.</p>
+        <p v-else-if="!loading && filteredPlaybooks.length === 0" class="empty">검색 결과가 없습니다.</p>
+      </div>
+    </section>
 
-      <section class="panel editor-panel">
-        <div v-if="!selectedBoardId" class="tactic-table-panel">
-          <div class="table-toolbar">
-            <label class="filter">
-              <span>전술집</span>
-              <select v-model="selectedBookId" @change="onSelectPlaybook(selectedBookId)">
-                <option value="">선택하세요</option>
-                <option v-for="book in playbooks" :key="book.id" :value="book.id">{{ book.title }}</option>
-              </select>
-            </label>
-            <label class="filter">
-              <ListFilter :size="14" :stroke-width="1.9" />
-              <select v-model="category" @change="loadTactics">
-                <option value="ALL">전체</option>
-                <option value="OFFENSE">OFFENSE</option>
-                <option value="DEFENSE">DEFENSE</option>
-                <option value="SPECIAL">SPECIAL</option>
-                <option value="OTHER">OTHER</option>
-              </select>
-            </label>
-            <button type="button" class="primary" :disabled="loading || saving" @click="openCreatePlaybookModal">전술집 생성</button>
-            <button type="button" :disabled="!selectedBookId || loading || saving" @click="onClonePlaybook">전술집 복제</button>
-            <button type="button" class="danger" :disabled="!selectedBookId || loading || saving" @click="onDeletePlaybook">전술집 삭제</button>
-            <button type="button" class="primary" :disabled="!selectedBookId || loading || saving" @click="openCreateTacticModal">작전 생성</button>
-            <button type="button" :disabled="loading || saving" @click="onRefresh">
-              <RefreshCw :size="14" :stroke-width="1.9" />새로고침
+    <section v-else class="panel editor-panel">
+      <div class="tactic-entry-head">
+        <div class="tactic-entry-title">
+          <div class="tactic-title-row">
+            <button type="button" class="back-btn" @click="onBackToPlaybooks">
+              <ArrowLeft :size="16" :stroke-width="2" />
             </button>
+            <h2>{{ selectedBook?.title || '전술집' }}</h2>
           </div>
-
-          <div class="tactic-table-wrap">
-            <table class="tactic-table">
-              <thead>
-                <tr>
-                  <th>작전명</th>
-                  <th>종류</th>
-                  <th>개요</th>
-                  <th>수정일</th>
-                  <th>버전</th>
-                  <th>작업</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="item in tactics" :key="item.id">
-                  <td>{{ item.title }}</td>
-                  <td>{{ item.category }}</td>
-                  <td>{{ item.summary || '-' }}</td>
-                  <td>{{ formatDate(item.updatedAt) }}</td>
-                  <td>v{{ item.lastPublishedVersion ?? 0 }}</td>
-                  <td class="actions-cell">
-                    <button type="button" class="small" @click="openBoard(item.id)">수정</button>
-                    <button type="button" class="small danger" @click="onDeleteBoard(item.id)">삭제</button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <p v-if="!selectedBookId" class="empty">전술집을 선택하면 전술이 표시됩니다.</p>
-          <p v-else-if="!loading && tactics.length === 0" class="empty">등록된 전술이 없습니다.</p>
+          <p class="meta">선택된 전술집의 작전 목록입니다.</p>
         </div>
+        <div class="table-toolbar">
+          <button type="button" class="primary" :disabled="loading || saving" @click="openCreateTacticModal">작전 생성</button>
+          <button type="button" :disabled="loading || saving" @click="onClonePlaybook">전술집 복제</button>
+          <button type="button" class="danger" :disabled="loading || saving" @click="onDeletePlaybook">전술집 삭제</button>
+          <label class="filter">
+            <ListFilter :size="14" :stroke-width="1.9" />
+            <select v-model="category" @change="loadTactics">
+              <option value="ALL">전체</option>
+              <option value="OFFENSE">OFFENSE</option>
+              <option value="DEFENSE">DEFENSE</option>
+              <option value="SPECIAL">SPECIAL</option>
+              <option value="OTHER">OTHER</option>
+            </select>
+          </label>
+          <button type="button" :disabled="loading || saving" @click="onRefresh">
+            <RefreshCw :size="14" :stroke-width="1.9" />새로고침
+          </button>
+        </div>
+      </div>
 
-        <template v-else>
-          <div class="editor-head">
-            <div>
-              <h2>{{ selectedBoard?.title }}</h2>
-              <p class="meta">카테고리: {{ selectedBoard?.category }} / 버전: v{{ selectedBoard?.lastPublishedVersion ?? 0 }}</p>
-              <p class="meta">소속 전술집: {{ selectedBook?.title || '-' }}</p>
-            </div>
-            <div class="save-actions">
-              <button type="button" :disabled="saving" @click="onSaveCurrent">
-                <Save :size="14" :stroke-width="1.9" />현재 저장</button>
-              <button type="button" class="primary" :disabled="saving" @click="onSaveVersion">
-                <Check :size="14" :stroke-width="1.9" />버전 저장</button>
-            </div>
+      <div class="book-layout">
+        <aside class="tactic-side">
+          <div class="tactic-side-head">
+            <h3>작전 목록</h3>
+            <span>{{ tactics.length }}개</span>
           </div>
 
-          <div class="meta-form">
-            <label>
-              <span>작전명</span>
-              <input v-model="boardMetaForm.title" type="text" />
-            </label>
-            <label>
-              <span>작전종류</span>
-              <select v-model="boardMetaForm.category">
-                <option value="OFFENSE">OFFENSE</option>
-                <option value="DEFENSE">DEFENSE</option>
-                <option value="SPECIAL">SPECIAL</option>
-                <option value="OTHER">OTHER</option>
-              </select>
-            </label>
-            <label>
-              <span>작전개요</span>
-              <input v-model="boardMetaForm.summary" type="text" />
-            </label>
-            <label>
-              <span>포지션별 역할설명</span>
-              <input v-model="boardMetaForm.roleDescription" type="text" />
-            </label>
+          <div class="tactic-list">
+            <button
+              v-for="item in tactics"
+              :key="item.id"
+              type="button"
+              class="tactic-item"
+              :class="{ active: selectedBoardId === item.id }"
+              @click="openBoard(item.id)"
+            >
+              <strong>{{ item.title }}</strong>
+              <span class="tactic-summary">{{ item.summary || '개요 없음' }}</span>
+              <span>{{ item.category }} / v{{ item.lastPublishedVersion ?? 0 }}</span>
+              <span>{{ formatDate(item.updatedAt) }}</span>
+            </button>
+            <p v-if="!loading && tactics.length === 0" class="empty">등록된 전술이 없습니다.</p>
           </div>
+        </aside>
+
+        <section class="tactic-main">
+          <div v-if="!selectedBoardId" class="empty-editor">
+            좌측 작전 목록에서 작전을 선택하면 보드가 표시됩니다.
+          </div>
+
+          <template v-else>
+            <div class="editor-head">
+              <div>
+                <h2>{{ selectedBoard?.title }}</h2>
+                <p class="meta">카테고리: {{ selectedBoard?.category }} / 버전: v{{ selectedBoard?.lastPublishedVersion ?? 0 }}</p>
+                <p class="meta">소속 전술집: {{ selectedBook?.title || '-' }}</p>
+              </div>
+              <div class="save-actions">
+                <button type="button" :disabled="saving" @click="onSaveCurrent">
+                  <Save :size="14" :stroke-width="1.9" />현재 저장</button>
+                <button type="button" class="primary" :disabled="saving" @click="onSaveVersion">
+                  <Check :size="14" :stroke-width="1.9" />버전 저장</button>
+                <button type="button" class="small danger" :disabled="loading || saving" @click="onDeleteBoard(selectedBoardId)">
+                  삭제
+                </button>
+              </div>
+            </div>
+
+            <div class="meta-form">
+              <label>
+                <span>작전명</span>
+                <input v-model="boardMetaForm.title" type="text" />
+              </label>
+              <label>
+                <span>작전종류</span>
+                <select v-model="boardMetaForm.category">
+                  <option value="OFFENSE">OFFENSE</option>
+                  <option value="DEFENSE">DEFENSE</option>
+                  <option value="SPECIAL">SPECIAL</option>
+                  <option value="OTHER">OTHER</option>
+                </select>
+              </label>
+              <label>
+                <span>작전개요</span>
+                <input v-model="boardMetaForm.summary" type="text" />
+              </label>
+              <label>
+                <span>포지션별 역할설명</span>
+                <input v-model="boardMetaForm.roleDescription" type="text" />
+              </label>
+            </div>
 
           <div class="control-row">
             <div class="tool-group">
@@ -968,57 +1083,58 @@ onMounted(async () => {
             </div>
           </div>
 
-          <div class="bottom-grid">
-            <div class="call-column">
-              <section class="sub-panel">
-                <h3><GitBranch :size="14" :stroke-width="1.9" />그려진 라인</h3>
-                <ul>
-                  <li v-for="row in routeRows" :key="row.drawId">
-                    <span>{{ row.type }} / 시작 노드: {{ row.nodeLabel }} / 점 {{ row.points?.length ?? 0 }}개</span>
-                    <button type="button" class="danger small" @click="removeDrawing(row.drawId)">삭제</button>
-                  </li>
-                  <li v-if="routeRows.length === 0" class="empty">라인이 없습니다.</li>
-                </ul>
-              </section>
+            <div class="bottom-grid">
+              <div class="call-column">
+                <section class="sub-panel">
+                  <h3><GitBranch :size="14" :stroke-width="1.9" />그려진 라인</h3>
+                  <ul>
+                    <li v-for="row in routeRows" :key="row.drawId">
+                      <span>{{ row.type }} / 시작 노드: {{ row.nodeLabel }} / 점 {{ row.points?.length ?? 0 }}개</span>
+                      <button type="button" class="danger small" @click="removeDrawing(row.drawId)">삭제</button>
+                    </li>
+                    <li v-if="routeRows.length === 0" class="empty">라인이 없습니다.</li>
+                  </ul>
+                </section>
 
-              <section class="sub-panel">
-                <h3><CircleDot :size="14" :stroke-width="1.9" />텍스트 주석</h3>
-                <ul>
-                  <li v-for="note in boardState.annotations" :key="note.annotationId">
-                    <input v-model="note.text" type="text">
-                    <button type="button" class="danger small" @click="removeAnnotation(note.annotationId)">삭제</button>
-                  </li>
-                  <li v-if="boardState.annotations.length === 0" class="empty">주석이 없습니다.</li>
-                </ul>
-              </section>
-            </div>
+                <section class="sub-panel">
+                  <h3><CircleDot :size="14" :stroke-width="1.9" />텍스트 주석</h3>
+                  <ul>
+                    <li v-for="note in boardState.annotations" :key="note.annotationId">
+                      <input v-model="note.text" type="text">
+                      <button type="button" class="danger small" @click="removeAnnotation(note.annotationId)">삭제</button>
+                    </li>
+                    <li v-if="boardState.annotations.length === 0" class="empty">주석이 없습니다.</li>
+                  </ul>
+                </section>
+              </div>
 
-            <div class="call-column">
-              <section class="sub-panel">
-                <h3>버전 히스토리</h3>
-                <div class="version-save">
-                  <input v-model="versionMessage" type="text" placeholder="버전 메시지">
-                  <button type="button" class="primary" :disabled="saving" @click="onSaveVersion">버전 저장</button>
-                </div>
-                <ul>
-                  <li v-for="v in versions" :key="v.id">
-                    <span>v{{ v.version }} - {{ v.message || '-' }}</span>
-                    <button type="button" class="small" :disabled="saving" @click="onApplyVersion(v.id)">복원</button>
-                  </li>
-                  <li v-if="versions.length === 0" class="empty">저장된 버전이 없습니다.</li>
-                </ul>
-              </section>
+              <div class="call-column">
+                <section class="sub-panel">
+                  <h3>버전 히스토리</h3>
+                  <div class="version-save">
+                    <input v-model="versionMessage" type="text" placeholder="버전 메시지">
+                    <button type="button" class="primary" :disabled="saving" @click="onSaveVersion">버전 저장</button>
+                  </div>
+                  <ul>
+                    <li v-for="v in versions" :key="v.id">
+                      <span>v{{ v.version }} - {{ v.message || '-' }}</span>
+                      <button type="button" class="small" :disabled="saving" @click="onApplyVersion(v.id)">복원</button>
+                    </li>
+                    <li v-if="versions.length === 0" class="empty">저장된 버전이 없습니다.</li>
+                  </ul>
+                </section>
+              </div>
             </div>
-          </div>
-        </template>
-      </section>
+          </template>
+        </section>
+      </div>
     </section>
 
-    <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
-    <p v-if="actionMessage" class="success">{{ actionMessage }}</p>
+    <InlineMessage :message="errorMessage" type="error" />
+    <InlineMessage :message="actionMessage" type="success" />
 
-    <div v-if="showCreateTacticModal" class="modal-backdrop" @click.self="closeCreateTacticModal">
-      <form class="modal-panel" @submit.prevent="onCreateBoard">
+    <BaseModal :show="showCreateTacticModal" @close="closeCreateTacticModal">
+      <form class="modal-form" @submit.prevent="onCreateBoard">
         <h3>작전 생성</h3>
         <label>
           <span>작전명</span>
@@ -1050,10 +1166,10 @@ onMounted(async () => {
           <button type="submit" class="primary" :disabled="loading || saving">완료</button>
         </div>
       </form>
-    </div>
+    </BaseModal>
 
-    <div v-if="showCreateBookModal" class="modal-backdrop" @click.self="closeCreatePlaybookModal">
-      <form class="modal-panel" @submit.prevent="onCreatePlaybook">
+    <BaseModal :show="showCreateBookModal" @close="closeCreatePlaybookModal">
+      <form class="modal-form" @submit.prevent="onCreatePlaybook">
         <h3>전술집 생성</h3>
         <label>
           <span>전술집 제목</span>
@@ -1068,7 +1184,7 @@ onMounted(async () => {
           <button type="submit" class="primary" :disabled="loading || saving">완료</button>
         </div>
       </form>
-    </div>
+    </BaseModal>
   </main>
 </template>
 
@@ -1089,30 +1205,15 @@ onMounted(async () => {
   box-shadow: var(--kw-shadow-card);
 }
 
-.eyebrow {
-  margin: 0;
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  color: var(--kw-text-soft);
-  text-transform: uppercase;
-}
-
-.header-panel h1 {
-  margin: 6px 0 8px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.header-panel .sub {
-  margin: 0;
-  color: var(--kw-text-muted);
-}
-
 .layout {
   display: grid;
   grid-template-columns: 320px 1fr;
   gap: 12px;
+}
+
+.playbook-panel {
+  display: grid;
+  gap: 10px;
 }
 
 .left-panel h2 {
@@ -1123,7 +1224,7 @@ onMounted(async () => {
 .left-head {
   margin-bottom: 10px;
   display: grid;
-  gap: 8px;
+  gap: 4px;
 }
 
 .left-controls {
@@ -1221,17 +1322,45 @@ onMounted(async () => {
   max-height: 540px;
   overflow: auto;
   display: grid;
-  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
 }
 
 .board-item {
   text-align: left;
   display: grid;
-  gap: 3px;
+  gap: 8px;
   border: 1px solid var(--kw-line);
-  border-radius: 10px;
-  background: var(--kw-surface-muted);
-  padding: 10px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  padding: 12px;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.06);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+}
+
+.board-item:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 18px rgba(15, 23, 42, 0.1);
+}
+
+.board-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.active-badge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-radius: 999px;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .board-item-row {
@@ -1253,7 +1382,8 @@ onMounted(async () => {
 }
 
 .board-item strong {
-  font-size: 14px;
+  font-size: 15px;
+  line-height: 1.3;
 }
 
 .board-item span {
@@ -1263,15 +1393,145 @@ onMounted(async () => {
 
 .book-desc {
   white-space: pre-wrap;
+  line-height: 1.35;
+}
+
+.book-desc.muted {
+  color: #94a3b8;
+}
+
+.book-meta {
+  display: grid;
+  gap: 2px;
+}
+
+.book-stats {
+  margin-top: 2px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 8px;
+}
+
+.book-stats span {
+  font-size: 12px;
+  color: #334155;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  border-radius: 8px;
+  padding: 3px 6px;
 }
 
 .board-item.active {
-  border-color: var(--kw-primary);
-  background: #eff6ff;
+  border-color: #93c5fd;
+  background: linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%);
+  box-shadow: 0 10px 18px rgba(37, 99, 235, 0.18);
 }
 
 .editor-panel {
   min-height: 760px;
+}
+
+.book-layout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 12px;
+  min-height: 760px;
+}
+
+.tactic-side {
+  border: 1px solid var(--kw-line);
+  border-radius: 10px;
+  background: var(--kw-surface-muted);
+  padding: 10px;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 0;
+}
+
+.tactic-side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.tactic-side-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.tactic-side-head span {
+  font-size: 12px;
+  color: var(--kw-text-soft);
+}
+
+.tactic-list {
+  min-height: 0;
+  max-height: calc(100vh - 270px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tactic-item {
+  flex: 0 0 auto;
+  text-align: left;
+  border: 1px solid var(--kw-line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.tactic-item strong {
+  font-size: 14px;
+}
+
+.tactic-item span {
+  font-size: 12px;
+  color: var(--kw-text-soft);
+}
+
+.tactic-summary {
+  color: #64748b;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.tactic-item.active {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.tactic-main {
+  border: 1px solid var(--kw-line);
+  border-radius: 10px;
+  padding: 12px;
+  min-width: 0;
+}
+
+.tactic-entry-head {
+  margin-bottom: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tactic-entry-title h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.tactic-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .empty-editor {
@@ -1299,6 +1559,14 @@ onMounted(async () => {
   border-radius: 8px;
   padding: 0 10px;
   background: #fff;
+}
+
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  padding: 0;
 }
 
 .tactic-table-wrap {
@@ -1618,55 +1886,29 @@ onMounted(async () => {
   font-size: 13px;
 }
 
-.error {
-  margin: 0;
-  color: var(--kw-danger-text);
-  font-size: 13px;
-}
-
-.success {
-  margin: 0;
-  color: var(--kw-success-text);
-  font-size: 13px;
-}
-
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(15, 23, 42, 0.45);
-  display: grid;
-  place-items: center;
-  z-index: 50;
-}
-
-.modal-panel {
-  width: min(560px, calc(100vw - 32px));
-  background: #fff;
-  border: 1px solid var(--kw-line);
-  border-radius: 12px;
-  padding: 16px;
+.modal-form {
   display: grid;
   gap: 10px;
 }
 
-.modal-panel h3 {
+.modal-form h3 {
   margin: 0;
   font-size: 18px;
 }
 
-.modal-panel label {
+.modal-form label {
   display: grid;
   gap: 4px;
 }
 
-.modal-panel label span {
+.modal-form label span {
   font-size: 12px;
   color: var(--kw-text-soft);
 }
 
-.modal-panel input,
-.modal-panel select,
-.modal-panel textarea {
+.modal-form input,
+.modal-form select,
+.modal-form textarea {
   border: 1px solid var(--kw-line-strong);
   border-radius: 8px;
   padding: 10px;
@@ -1680,6 +1922,14 @@ onMounted(async () => {
 }
 
 @media (max-width: 1100px) {
+  .book-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .tactic-list {
+    max-height: 320px;
+  }
+
   .layout {
     grid-template-columns: 1fr;
   }

@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { RefreshCw, Trash2, Users } from 'lucide-vue-next'
 import { getMemberStatusDetail } from '../api/auth'
 import { createPlayer, fetchPlayers, softDeletePlayer, updatePlayer } from '../api/players'
+import InlineMessage from '../components/common/InlineMessage.vue'
+import PageHeaderPanel from '../components/common/PageHeaderPanel.vue'
 
 const OFFENSE_OPTIONS = ['QB', 'RB', 'OL', 'TE', 'WR']
 const DEFENSE_OPTIONS = ['DL', 'LB', 'C', 'S']
@@ -403,12 +405,13 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="page">
-    <header class="panel header-panel">
-      <p class="eyebrow">Player Management</p>
-      <h1><Users :size="22" :stroke-width="1.9" />선수 관리</h1>
-      <p class="sub">선수 조회, 등록, 상태/포지션/신체 정보 편집을 처리합니다.</p>
-      <p class="meta">내 권한: {{ myRole }}</p>
-    </header>
+    <PageHeaderPanel
+      eyebrow="Player Management"
+      title="선수 관리"
+      subtitle="선수 조회, 등록, 상태/포지션/신체 정보 편집을 처리합니다."
+      :meta="`내 권한: ${myRole}`"
+      :icon="Users"
+    />
 
     <section class="panel">
       <div class="toolbar">
@@ -464,9 +467,9 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <p v-if="!canEditPlayers" class="notice">ADMIN, COACH만 선수 편집이 가능합니다.</p>
-      <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
-      <p v-if="actionMessage" class="success">{{ actionMessage }}</p>
+      <InlineMessage :message="!canEditPlayers ? 'ADMIN, COACH만 선수 편집이 가능합니다.' : ''" type="notice" />
+      <InlineMessage :message="errorMessage" type="error" />
+      <InlineMessage :message="actionMessage" type="success" />
 
       <div class="table-wrap">
         <table>
@@ -573,11 +576,6 @@ onBeforeUnmount(() => {
   box-shadow: var(--kw-shadow-card);
 }
 
-.eyebrow { margin: 0; font-size: 12px; letter-spacing: 0.08em; color: var(--kw-text-soft); text-transform: uppercase; }
-.header-panel h1 { margin: 6px 0 8px; font-size: 28px; display: flex; align-items: center; gap: 8px; }
-.sub { margin: 0; color: var(--kw-text-muted); }
-.meta { margin: 8px 0 0; color: var(--kw-text-soft); font-size: 13px; }
-
 .toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
 .toolbar input { flex: 1; height: 40px; border: 1px solid var(--kw-line-strong); border-radius: var(--kw-radius-sm); padding: 0 12px; }
 .toolbar button { display: inline-flex; align-items: center; gap: 6px; height: 40px; border: 1px solid var(--kw-line-strong); border-radius: var(--kw-radius-sm); padding: 0 12px; background: var(--kw-surface); }
@@ -596,10 +594,6 @@ onBeforeUnmount(() => {
 .create-actions { margin-top: 10px; }
 .create-actions button { height: 36px; border: 1px solid var(--kw-line-strong); border-radius: 8px; padding: 0 12px; background: var(--kw-surface); }
 .create-actions .primary { background: var(--kw-primary); border-color: var(--kw-primary); color: var(--kw-primary-contrast); }
-
-.notice { margin: 0 0 10px; color: #92400e; background: #fffbeb; border: 1px solid #fcd34d; border-radius: 10px; padding: 8px 10px; font-size: 13px; }
-.error { margin: 0 0 10px; color: var(--kw-danger-text); font-size: 13px; }
-.success { margin: 0 0 10px; color: var(--kw-success-text); font-size: 13px; }
 
 .table-wrap { border: 1px solid var(--kw-line); border-radius: var(--kw-radius-md); overflow: auto; }
 table { width: 100%; border-collapse: collapse; table-layout: fixed; }
