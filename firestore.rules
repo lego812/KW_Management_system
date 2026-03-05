@@ -2,9 +2,7 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    /** -----------------------------
-     *  Helpers
-     *  ----------------------------- */
+    /** Helpers */
     function signedIn() {
       return request.auth != null;
     }
@@ -13,90 +11,70 @@ service cloud.firestore {
       return request.auth.uid;
     }
 
-    // org 硫ㅻ쾭 臾몄꽌 ref
     function memberDoc(orgId) {
       return /databases/$(database)/documents/orgs/$(orgId)/members/$(uid());
     }
 
-    // org 硫ㅻ쾭 議댁옱 ?щ?
+    // User is member of org
     function isMember(orgId) {
       return signedIn() && exists(memberDoc(orgId));
     }
 
-    // org 硫ㅻ쾭 ?뱀씤 ?щ?
+    // Member approved by admin
     function isApproved(orgId) {
       return isMember(orgId) && get(memberDoc(orgId)).data.status == "APPROVED";
     }
 
-    // org 愿由ъ옄 ?щ?
+    // Org admin
     function isAdmin(orgId) {
       return isApproved(orgId) && get(memberDoc(orgId)).data.role == "ADMIN";
     }
 
+    // Coach or admin
     function isCoachOrAdmin(orgId) {
       return isApproved(orgId) && get(memberDoc(orgId)).data.role in ["ADMIN", "COACH"];
     }
 
-    // 蹂몄씤 臾몄꽌留??섏젙 媛??(users ?꾨줈??
+    // Access to own user doc only
     function isSelf(userId) {
       return signedIn() && uid() == userId;
     }
 
-    // ?쒕쾭 ??꾩뒪?ы봽/媛먯궗?꾨뱶???대씪媛 留덉쓬?濡?諛붽씀吏 紐삵븯寃??좏깮)
-    // ?꾩슂?섎㈃ ???꾧꺽?섍쾶 ?쒗븳 媛??
-
-    /** -----------------------------
-     *  users (?꾩뿭 ?ъ슜???꾨줈??
-     *  users/{uid}
-     *  - 蹂몄씤留??쎄린/?곌린 媛??     *  - (?먰븯硫? ADMIN???꾩껜 議고쉶 媛?ν븯?꾨줉 ?뺤옣 媛??     *  ----------------------------- */
+    /** users/{uid} */
     match /users/{userId} {
       allow read: if isSelf(userId);
       allow create: if isSelf(userId);
       allow update: if isSelf(userId);
-      allow delete: if false; // 蹂댄넻 ?꾨줈????젣???쒕쾭/愿由ъ옄 ?뚮줈?곕줈
+      allow delete: if false;
     }
 
-
-    /** -----------------------------
-     *  orgs (議곗쭅)
-     *  orgs/{orgId}
-     *  - ?뱀씤??硫ㅻ쾭留??쎄린
-     *  - 議곗쭅 ?앹꽦/?섏젙? ADMIN ?먮뒗 ownerUid 湲곗??쇰줈 ?댁쁺(?ш린?쒕뒗 ADMIN)
-     *  ----------------------------- */
+    /** orgs/{orgId} */
     match /orgs/{orgId} {
       allow read: if isApproved(orgId);
 
-      // 議곗쭅 ?앹꽦: 濡쒓렇?명븳 ?щ엺??ownerUid濡?留뚮뱾?꾨줉 ?덉슜 (?먰븯硫?留됱븘????
+      // Org create: requester must be owner
       allow create: if signedIn()
         && request.resource.data.ownerUid == uid();
 
-      // organization update/delete: admin only
+      // Org update/delete: admin only
       allow update, delete: if isAdmin(orgId);
 
-
-      /** -----------------------------
-       *  members (?뱀씤/??븷 愿由?
-       *  orgs/{orgId}/members/{memberId}
-       *  ----------------------------- */
+      /** members */
       match /members/{memberId} {
-        // 紐⑸줉 議고쉶/?쎄린: ?뱀씤??硫ㅻ쾭留?(?먮뒗 admin留뚯쑝濡?以꾩뿬????
         allow read: if isApproved(orgId);
 
-        // 媛???좎껌): 蹂몄씤 臾몄꽌留??앹꽦 媛?? status??PENDING?쇰줈 媛뺤젣
+        // Self-signup as pending member
         allow create: if signedIn()
           && memberId == uid()
           && request.resource.data.uid == uid()
-          && request.resource.data.role in ["USER", "COACH"] // 理쒖큹 媛??role
+          && request.resource.data.role in ["USER", "COACH"]
           && request.resource.data.status == "PENDING";
 
-        // update:
-        // - admin can manage member approval/role
-        // - self can only update limited fields without changing role/status
+        // Admin can manage member doc
+        // Self can update limited fields only
         allow update: if
-          // ADMIN: 臾댁뾿?대뱺(?ш린?쒕뒗 members 愿由??꾧텒)
           isAdmin(orgId)
           ||
-          // 蹂몄씤: ?뱀씤/沅뚰븳 嫄대뱶由ъ? 紐삵븯寃??쒗븳
           (
             signedIn()
             && memberId == uid()
@@ -105,42 +83,30 @@ service cloud.firestore {
             && request.resource.data.status == resource.data.status
           );
 
-        // ??젣: ?먯튃?곸쑝濡?湲덉?(媛먯궗/異붿쟻). ?꾩슂?섎㈃ ADMIN留??덉슜
         allow delete: if isAdmin(orgId);
       }
 
-
-      /** -----------------------------
-       *  players (?좎닔 愿由?
-       *  orgs/{orgId}/players/{playerId}
-       *  - ?뱀씤??硫ㅻ쾭 ?쎄린
-       *  - ADMIN留??앹꽦/?섏젙(?뚰봽?몄궘???ы븿)
-       *  - 臾쇰━ delete 湲덉?(soft delete)
-       *  ----------------------------- */
+      /** players */
       match /players/{playerId} {
         allow read: if isApproved(orgId);
         allow create, update: if isCoachOrAdmin(orgId);
         allow delete: if false;
       }
 
-
-      /** -----------------------------
-       *  formations (?щ찓?댁뀡 ?꾨━??
-       *  orgs/{orgId}/formations/{formationId}
-       *  - ?뱀씤??硫ㅻ쾭留?CRUD
-       *  ----------------------------- */
+      /** formations */
       match /formations/{formationId} {
         allow read: if isApproved(orgId);
         allow create, update, delete: if isApproved(orgId);
       }
 
+      /** tacticBooks (playbooks) */
+      match /tacticBooks/{bookId} {
+        allow read: if isApproved(orgId);
+        allow create, update: if isApproved(orgId);
+        allow delete: if false;
+      }
 
-      /** -----------------------------
-       *  tacticBoards (?꾩닠 蹂대뱶 硫뷀?)
-       *  orgs/{orgId}/tacticBoards/{boardId}
-       *  - ?뱀씤??硫ㅻ쾭 ?쎄린/?앹꽦/?섏젙
-       *  - 臾쇰━ delete 湲덉?(soft delete)
-       *  ----------------------------- */
+      /** tacticBoards */
       match /tacticBoards/{boardId} {
         allow read: if isApproved(orgId);
         allow create, update: if isApproved(orgId);
@@ -200,7 +166,7 @@ service cloud.firestore {
           }
         }
 
-        // comments (?좏깮)
+        // comments
         match /comments/{commentId} {
           allow read: if isApproved(orgId);
           allow create, update: if isApproved(orgId);
@@ -209,12 +175,9 @@ service cloud.firestore {
       }
     }
 
-    /** -----------------------------
-     *  Default deny
-     *  ----------------------------- */
+    /** Default deny */
     match /{document=**} {
       allow read, write: if false;
     }
   }
 }
-

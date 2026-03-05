@@ -5,7 +5,6 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   createPendingMemberProfile,
   getMemberStatus,
-  getMemberStatusDetail,
   signInByEmail,
   signInByGoogle,
   signOutUser,
@@ -59,7 +58,6 @@ function isPendingByPermissionError(error) {
 async function verifyApprovedOrShowPending(targetUser) {
   checkingStatus.value = true
   try {
-    const detail = await getMemberStatusDetail(targetUser?.uid)
     const status = await getMemberStatus(targetUser?.uid)
     if (status !== 'APPROVED') {
       await signOutUser()
