@@ -2,6 +2,9 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Check, RefreshCw, ShieldCheck, Users, UserRound } from 'lucide-vue-next'
 import { approveMember, getMyMemberProfile, listUsers, updateMemberRole } from '../api/users'
+import InlineMessage from '../components/common/InlineMessage.vue'
+import PageHeaderPanel from '../components/common/PageHeaderPanel.vue'
+import StatSummaryCard from '../components/common/StatSummaryCard.vue'
 
 const loading = ref(false)
 const errorMessage = ref('')
@@ -118,20 +121,21 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="page">
-    <header class="panel header-panel">
-      <p class="eyebrow">User Overview</p>
-      <h1><UserRound :size="22" :stroke-width="1.9" />유저 통합 현황</h1>
-      <p class="sub">유저 승인 상태와 권한 분포를 확인합니다.</p>
-      <p class="meta">내 권한: {{ myRole }} / 내 상태: {{ myStatus }}</p>
-    </header>
+    <PageHeaderPanel
+      eyebrow="User Overview"
+      title="유저 통합 현황"
+      subtitle="유저 승인 상태와 권한 분포를 확인합니다."
+      :meta="`내 권한: ${myRole} / 내 상태: ${myStatus}`"
+      :icon="UserRound"
+    />
 
     <section class="stats-grid">
-      <article class="panel stat-card"><h2><Users :size="16" :stroke-width="1.9" />전체</h2><strong>{{ totalCount }}명</strong></article>
-      <article class="panel stat-card"><h2><ShieldCheck :size="16" :stroke-width="1.9" />승인</h2><strong>{{ approvedCount }}명</strong></article>
-      <article class="panel stat-card"><h2><ShieldCheck :size="16" :stroke-width="1.9" />대기</h2><strong>{{ pendingCount }}명</strong></article>
-      <article class="panel stat-card"><h2><ShieldCheck :size="16" :stroke-width="1.9" />ADMIN</h2><strong>{{ adminCount }}명</strong></article>
-      <article class="panel stat-card"><h2><ShieldCheck :size="16" :stroke-width="1.9" />COACH</h2><strong>{{ coachCount }}명</strong></article>
-      <article class="panel stat-card"><h2><ShieldCheck :size="16" :stroke-width="1.9" />USER</h2><strong>{{ userCount }}명</strong></article>
+      <StatSummaryCard label="전체" :value="`${totalCount}명`" :icon="Users" />
+      <StatSummaryCard label="승인" :value="`${approvedCount}명`" :icon="ShieldCheck" />
+      <StatSummaryCard label="대기" :value="`${pendingCount}명`" :icon="ShieldCheck" />
+      <StatSummaryCard label="ADMIN" :value="`${adminCount}명`" :icon="ShieldCheck" />
+      <StatSummaryCard label="COACH" :value="`${coachCount}명`" :icon="ShieldCheck" />
+      <StatSummaryCard label="USER" :value="`${userCount}명`" :icon="ShieldCheck" />
     </section>
 
     <section class="panel">
@@ -142,9 +146,9 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <p v-if="!isAdmin" class="notice">관리자 권한이 아니면 승인 버튼이 보이지 않습니다.</p>
-      <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
-      <p v-if="actionMessage" class="success">{{ actionMessage }}</p>
+      <InlineMessage :message="!isAdmin ? '관리자 권한이 아니면 승인 버튼이 보이지 않습니다.' : ''" type="notice" />
+      <InlineMessage :message="errorMessage" type="error" />
+      <InlineMessage :message="actionMessage" type="success" />
 
       <div class="table-wrap">
         <table>
@@ -207,21 +211,11 @@ onBeforeUnmount(() => {
 <style scoped>
 .page { max-width: 1080px; margin: 0 auto; padding: 24px 16px 32px; display: grid; gap: 12px; }
 .panel { background: var(--kw-surface); border: 1px solid var(--kw-line); border-radius: var(--kw-radius-lg); padding: 18px; box-shadow: var(--kw-shadow-card); }
-.eyebrow { margin: 0; font-size: 12px; letter-spacing: 0.08em; color: var(--kw-text-soft); text-transform: uppercase; }
-.header-panel h1 { margin: 6px 0 8px; font-size: 28px; display: flex; align-items: center; gap: 8px; }
-.sub { margin: 0; color: var(--kw-text-muted); }
-.meta { margin: 10px 0 0; color: var(--kw-text-soft); font-size: 13px; }
 
 .stats-grid { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: 12px; }
-.stat-card h2 { margin: 0; font-size: 13px; color: var(--kw-text-soft); font-weight: 500; display: flex; align-items: center; gap: 6px; }
-.stat-card strong { display: block; margin-top: 8px; font-size: 28px; line-height: 1; }
 
 .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .toolbar button { display: inline-flex; align-items: center; gap: 6px; height: 36px; border: 1px solid var(--kw-line-strong); border-radius: var(--kw-radius-sm); padding: 0 12px; background: var(--kw-surface); }
-
-.notice { margin: 0 0 10px; color: #92400e; background: #fffbeb; border: 1px solid #fcd34d; border-radius: 10px; padding: 8px 10px; font-size: 13px; }
-.error { margin: 0 0 12px; color: var(--kw-danger-text); font-size: 13px; }
-.success { margin: 0 0 12px; color: var(--kw-success-text); font-size: 13px; }
 
 .table-wrap { border: 1px solid var(--kw-line); border-radius: var(--kw-radius-md); overflow: auto; }
 table { width: 100%; border-collapse: collapse; }

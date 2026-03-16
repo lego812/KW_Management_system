@@ -18,7 +18,7 @@ const sectionDescription = computed(() => route.meta.description ?? '사이드�
 
 const navItems = [
   { to: '/', label: '유저 현황', icon: UserRound, roles: ['ADMIN', 'COACH'] },
-  { to: '/dashboard', label: '대시보드', icon: LayoutDashboard },
+  { to: '/dashboard', label: '팀 현황', icon: LayoutDashboard },
   { to: '/players', label: '선수 관리', icon: Users },
   { to: '/tactics', label: '전술 관리', icon: NotebookPen },
 ]
