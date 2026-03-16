@@ -17,6 +17,7 @@ import { auth, db, hasFirebaseConfig, orgId } from '../plugins/firebase'
 
 const EMPTY_STATE = {
   activeFormationId: '',
+  scrimmageLineY: 0.5,
   players: [],
   drawings: [],
   annotations: [],
@@ -114,6 +115,7 @@ function sanitizeState(input) {
   const base = input ?? EMPTY_STATE
   return {
     activeFormationId: String(base.activeFormationId ?? ''),
+    scrimmageLineY: clamp01(base.scrimmageLineY ?? 0.5),
     players: Array.isArray(base.players) ? base.players.map((node, idx) => sanitizeNode(node, idx)) : [],
     drawings: Array.isArray(base.drawings) ? base.drawings.map((d, idx) => sanitizeDrawing(d, idx)) : [],
     annotations: Array.isArray(base.annotations)
