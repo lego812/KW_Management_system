@@ -1,9 +1,7 @@
 ---
-name: Task
-about: 작업 이슈 템플릿
-title: "[TASK] "
-labels: task
-assignees: ''
+name: KW_TEMPLATE
+about: 이슈 템플릿
+title: "[] "
 ---
 
 ## 📌 배경 (Background)
@@ -15,9 +13,9 @@ assignees: ''
 - 성능, 구조, UX 등 구체적으로 작성
 
 ## 🛠 예정 작업 (Planned Work)
-- [ ] 작업 1
-- [ ] 작업 2
-- [ ] 작업 3
+- [ ] 
+- [ ] 
+- [ ] 
 
 ## 🎯 예상 효과 (Expected Outcome)
 - 작업 이후 기대되는 변화 작성
