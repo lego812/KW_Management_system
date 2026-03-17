@@ -101,6 +101,7 @@ function resetMessages() {
   }
 }
 
+
 function resetSorts() {
   Object.keys(sortBy).forEach((key) => {
     sortBy[key] = 'none'
